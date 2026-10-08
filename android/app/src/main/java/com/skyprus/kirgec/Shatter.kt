@@ -38,13 +38,11 @@ class Shard(
     var age = 0f
 }
 
-class Snapshot(val bitmap: Bitmap, val box: RectF, val bgColor: Int)
-
 /**
  * Ekranda görünen kamera karesinden nesnenin kutusunu keser. Köşelerdeki arka plan
  * elips maske ile atılır; kenar piksellerinin ortalaması nesnenin arkasındaki zemin rengidir.
  */
-fun snapshot(frame: Bitmap, box: RectF): Snapshot? {
+fun snapshot(frame: Bitmap, box: RectF): Cutout? {
     val l = box.left.roundToInt().coerceIn(0, frame.width - 2)
     val t = box.top.roundToInt().coerceIn(0, frame.height - 2)
     val r = box.right.roundToInt().coerceIn(l + 2, frame.width)
@@ -70,13 +68,13 @@ fun snapshot(frame: Bitmap, box: RectF): Snapshot? {
     }
     Canvas(masked).drawOval(RectF(-w * 0.06f, -h * 0.06f, w * 1.06f, h * 1.06f), paint)
     crop.recycle()
-    return Snapshot(masked, RectF(l.toFloat(), t.toFloat(), r.toFloat(), b.toFloat()), bg)
+    return Cutout(masked, RectF(l.toFloat(), t.toFloat(), r.toFloat(), b.toFloat()), bg, null, null)
 }
 
 /** Çarpma noktasından yayılan radyal kırık desenine göre parçalar üretir. */
-fun makeShards(snap: Snapshot, impactX: Float, impactY: Float, power: Float, d: Float): List<Shard> {
-    val img = snap.bitmap
-    val box = snap.box
+fun makeShards(cut: Cutout, impactX: Float, impactY: Float, power: Float, d: Float): List<Shard> {
+    val img = cut.obj
+    val box = cut.box
     val w = img.width.toFloat()
     val h = img.height.toFloat()
     val ix = (impactX - box.left).coerceIn(0f, w)
@@ -219,24 +217,53 @@ fun drawCracks(c: Canvas, box: RectF, cracks: List<FloatArray>, d: Float) {
 
 class Debris(val x: Float, val y: Float, val s: Float, val r: Float, val k: Int)
 
-class Wreck(val start: Long, val until: Long, val bg: Int, val debrisColor: Int) {
+/**
+ * Kırılan nesnenin bıraktığı iz. [patch] varsa nesnenin yeri çevresinden doldurulmuş görüntüyle örtülür;
+ * yoksa zemin rengiyle yumuşak bir örtü çizilir. [anchor], nesne takip ediliyorsa kutusunun kırılma
+ * anındaki hâlidir: kutu kaydıkça örtü de onunla birlikte kayar.
+ */
+class Wreck(
+    val start: Long,
+    val until: Long,
+    val bg: Int,
+    val debrisColor: Int,
+    val box: RectF,
+    val patch: Bitmap? = null,
+    val patchBox: RectF? = null,
+) {
     val debris = List(14) {
         Debris(rand(0.1f, 0.9f), rand(0.85f, 1f), rand(0.03f, 0.08f), rand(0f, PI.toFloat()), Random.nextInt(3, 6))
     }
 }
 
 private val wreckFill = Paint(Paint.ANTI_ALIAS_FLAG)
+private val patchPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+private val patchDst = RectF()
 private val debrisFill = Paint(Paint.ANTI_ALIAS_FLAG)
 private val debrisEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
 private val debrisPath = Path()
 private val ovalRect = RectF()
 
-/** Kırılan nesnenin yerini zemin rengiyle örter ve altına enkaz yığını çizer. */
+/**
+ * Kırılan nesnenin yerini örter ve altına enkaz yığını çizer.
+ * @param box nesnenin şu anki kutusu (takip ediliyorsa kayar, değilse kırılma anındaki kutu)
+ */
 fun drawWreck(c: Canvas, w: Wreck, box: RectF, now: Long, d: Float) {
-    val fadeIn = min(1f, (now - w.start) / 150f)
+    val fadeIn = min(1f, (now - w.start) / 120f)
     val fadeOut = min(1f, (w.until - now) / 800f)
     val a = min(fadeIn, fadeOut).coerceIn(0f, 1f)
     if (a <= 0f) return
+    val patch = w.patch
+    val pb = w.patchBox
+    if (patch != null && pb != null) {
+        val dx = box.left - w.box.left
+        val dy = box.top - w.box.top
+        patchDst.set(pb.left + dx, pb.top + dy, pb.right + dx, pb.bottom + dy)
+        patchPaint.alpha = (a * 255).toInt()
+        c.drawBitmap(patch, null, patchDst, patchPaint)
+        drawDebris(c, w, box, a, d)
+        return
+    }
     val cx = box.centerX()
     val cy = box.centerY()
     val rr = Color.red(w.bg); val gg = Color.green(w.bg); val bb = Color.blue(w.bg)
@@ -248,7 +275,10 @@ fun drawWreck(c: Canvas, w: Wreck, box: RectF, now: Long, d: Float) {
     wreckFill.alpha = (a * 255).toInt()
     ovalRect.set(cx - box.width() * 0.62f, cy - box.height() * 0.62f, cx + box.width() * 0.62f, cy + box.height() * 0.62f)
     c.drawOval(ovalRect, wreckFill)
+    drawDebris(c, w, box, a, d)
+}
 
+private fun drawDebris(c: Canvas, w: Wreck, box: RectF, a: Float, d: Float) {
     debrisFill.color = w.debrisColor
     debrisFill.alpha = (Color.alpha(w.debrisColor) * a).toInt()
     debrisEdge.color = Color.WHITE

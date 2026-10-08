@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Kır Geç AR</string>
-    <string name="ammo_ball">⚽ Top</string>
-    <string name="ammo_stone">🪨 Taş</string>
-    <string name="mark">⬚ Hedef çiz</string>
+    <string name="w_ball">⚽ Top</string>
+    <string name="w_stone">🪨 Taş</string>
+    <string name="w_bat">🏏 Sopa</string>
+    <string name="w_wrench">🔧 Anahtar</string>
     <string name="boxes">👁</string>
     <string name="permission_text">Oyun, etrafındaki kırılabilir eşyaları görmek için kameraya ihtiyaç duyar. Görüntü telefonundan dışarı çıkmaz.</string>
     <string name="permission_button">Kamera iznini ver</string>

@@ -41,6 +41,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var sfx: Sfx
     private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     @Volatile private var detector: Detector? = null
+    @Volatile private var segmenter: Segmenter? = null
+    private val segExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private var camera: Camera? = null
 
     private val permissionLauncher =
@@ -70,13 +72,14 @@ class MainActivity : ComponentActivity() {
         game.frameProvider = { previewView.bitmap }
         game.haptics = { vibrate(it) }
         game.onFocusRequest = { x, y -> focusAt(x, y) }
+        game.segmentAt = { x, y, done -> segmentAt(x, y, done) }
         game.onZoom = { factor ->
             camera?.let { cam ->
                 val z = cam.cameraInfo.zoomState.value
                 if (z != null) {
                     val ratio = (z.zoomRatio * factor).coerceIn(z.minZoomRatio, z.maxZoomRatio)
                     cam.cameraControl.setZoomRatio(ratio)
-                    game.status = "Yakınlaştırma: ${"%.1f".format(ratio)}x"
+                    game.hint("Yakınlaştırma: ${"%.1f".format(ratio)}x")
                 }
             }
         }
@@ -89,19 +92,22 @@ class MainActivity : ComponentActivity() {
             insets
         }
 
-        val btnBall = findViewById<TextView>(R.id.btnBall)
-        val btnStone = findViewById<TextView>(R.id.btnStone)
-        val btnMark = findViewById<TextView>(R.id.btnMark)
+        val weaponButtons = mapOf(
+            Weapon.BALL to findViewById<TextView>(R.id.btnBall),
+            Weapon.STONE to findViewById<TextView>(R.id.btnStone),
+            Weapon.BAT to findViewById<TextView>(R.id.btnBat),
+            Weapon.WRENCH to findViewById<TextView>(R.id.btnWrench),
+        )
+        weaponButtons.getValue(Weapon.BALL).isSelected = true
+        for ((w, btn) in weaponButtons) {
+            btn.setOnClickListener {
+                game.weapon = w
+                weaponButtons.forEach { (k, b) -> b.isSelected = k == w }
+                game.hint(if (w.thrown) "${w.label}: yukarı kaydır ya da dokun → fırlat"
+                else "${w.label}: vurmak istediğin yere dokun")
+            }
+        }
         val btnBoxes = findViewById<TextView>(R.id.btnBoxes)
-        btnBall.isSelected = true
-        btnBall.setOnClickListener {
-            game.ammo = Ammo.BALL; btnBall.isSelected = true; btnStone.isSelected = false
-        }
-        btnStone.setOnClickListener {
-            game.ammo = Ammo.STONE; btnStone.isSelected = true; btnBall.isSelected = false
-        }
-        btnMark.setOnClickListener { game.markMode = !game.markMode }
-        game.onMarkModeChanged = { btnMark.isSelected = it }
         btnBoxes.setOnClickListener {
             game.showBoxes = !game.showBoxes
             btnBoxes.isSelected = !game.showBoxes
@@ -109,6 +115,8 @@ class MainActivity : ComponentActivity() {
         findViewById<View>(R.id.btnPermission).setOnClickListener {
             permissionLauncher.launch(Manifest.permission.CAMERA)
         }
+
+        segExecutor.execute { segmenter = Segmenter.create(applicationContext) }
 
         // Model kamera açılırken arka planda yüklenir
         analysisExecutor.execute {
@@ -176,6 +184,22 @@ class MainActivity : ComponentActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
+    /** Ekrandaki kareyi alır, (x, y)'deki nesneyi arka planda ayırır, sonucu ana iş parçacığına verir. */
+    private fun segmentAt(x: Float, y: Float, done: (Cutout?) -> Unit) {
+        val frame = previewView.bitmap
+        if (frame == null) { done(null); return }
+        segExecutor.execute {
+            val cut = try {
+                segmenter?.cut(frame, x, y)
+            } catch (e: Throwable) {
+                null
+            } finally {
+                frame.recycle()
+            }
+            game.post { done(cut) }
+        }
+    }
+
     private fun focusAt(x: Float, y: Float) {
         val cam = camera ?: return
         if (previewView.width == 0) return
@@ -209,6 +233,11 @@ class MainActivity : ComponentActivity() {
             detector = null
         }
         analysisExecutor.shutdown()
+        segExecutor.execute {
+            segmenter?.close()
+            segmenter = null
+        }
+        segExecutor.shutdown()
         sfx.release()
     }
 }

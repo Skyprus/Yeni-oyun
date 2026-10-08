@@ -34,15 +34,24 @@ val OTHER_LABELS: Map<String, String> = mapOf(
     "orange" to "portakal", "sports ball" to "top",
 )
 
-val MANUAL_TARGET = Breakable("Hedef", 2, 150, Material.GLASS)
+/** Tanınmayan ama dokunarak/vurarak kırılan herhangi bir nesne. */
+val GENERIC_OBJECT = Breakable("Nesne", 1, 50, Material.CERAMIC)
 
-enum class Ammo(
+/**
+ * Kırma aletleri. Fırlatılanlar (top, taş) hedefe uçar; yakın dövüş aletleri (sopa, İngiliz anahtarı)
+ * dokunulan noktaya savrulur.
+ */
+enum class Weapon(
+    val label: String,
+    val thrown: Boolean,
     val radiusDp: Float,
     val duration: Float,
     val power: Float,
     val damage: Int,
     val hitPadDp: Float,
 ) {
-    BALL(34f, 0.55f, 0.8f, 1, 22f),
-    STONE(22f, 0.38f, 1.25f, 2, 8f),
+    BALL("Top", true, 34f, 0.55f, 0.8f, 1, 22f),
+    STONE("Taş", true, 22f, 0.38f, 1.25f, 2, 8f),
+    BAT("Sopa", false, 0f, 0.26f, 1.5f, 2, 16f),
+    WRENCH("İngiliz anahtarı", false, 0f, 0.22f, 1.1f, 3, 10f),
 }

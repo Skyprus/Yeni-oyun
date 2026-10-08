@@ -47,6 +47,9 @@ class Sfx(context: Context) {
             add("hit", 2) { synthHit(it) }
             add("miss", 1) { synthMiss() }
             add("throw", 1) { synthWhoosh(it) }
+            add("swing", 2) { synthSwing(it) }
+            add("bat", 2) { synthBat(it) }
+            add("clank", 2) { synthClank(it) }
         }.start()
     }
 
@@ -54,6 +57,9 @@ class Sfx(context: Context) {
     fun hit() = play("hit")
     fun miss() = play("miss")
     fun throwSound() = play("throw", 0.6f)
+    fun swing() = play("swing", 0.7f)
+    /** Yakın dövüş aletinin çarpma sesi (kırılma sesinin üstüne de çalınır). */
+    fun melee(w: Weapon) = play(if (w == Weapon.WRENCH) "clank" else "bat")
 
     private fun play(name: String, volume: Float = 1f) {
         val id = synchronized(sounds) { sounds[name]?.randomOrNull() } ?: return
@@ -141,6 +147,51 @@ class Sfx(context: Context) {
         fun synthWhoosh(r: Random): FloatArray {
             val out = buf(0.2f)
             noise(out, r, 0f, 0.18f, 800f, 'b', 0.6f)
+            return out
+        }
+
+        fun synthSwing(r: Random): FloatArray {
+            val out = buf(0.3f)
+            // Yükselip alçalan bant geçiren gürültü: havayı yaran alet
+            val n = out.size
+            var lp = 0f; var hp = 0f; var prev = 0f
+            for (i in 0 until n) {
+                val t = i.toFloat() / n
+                val f = 400f + 1800f * sin(PI.toFloat() * t)
+                val dt = 1f / SR
+                val aL = dt / (1f / (2f * PI.toFloat() * f * 1.5f) + dt)
+                val rcH = 1f / (2f * PI.toFloat() * f * 0.6f)
+                val aH = rcH / (rcH + dt)
+                val x = r.nextFloat() * 2f - 1f
+                lp += aL * (x - lp)
+                hp = aH * (hp + lp - prev); prev = lp
+                out[i] = hp * sin(PI.toFloat() * t)
+            }
+            return out
+        }
+
+        /** Tahta sopa: kısa, tok bir darbe. */
+        fun synthBat(r: Random): FloatArray {
+            val out = buf(0.35f)
+            var phase = 0f
+            for (i in out.indices) {
+                val t = i.toFloat() / SR
+                phase += 2f * PI.toFloat() * (180f * exp(-t * 8f) + 70f) / SR
+                out[i] += sin(phase) * exp(-t * 25f)
+            }
+            noise(out, r, 0f, 0.06f, 1500f, 'l', 0.9f)
+            ping(out, 0f, 420f + r.nextFloat() * 60f, 0.12f, 0.25f)
+            return out
+        }
+
+        /** İngiliz anahtarı: uyumsuz kısmi tonlarla metalik çınlama. */
+        fun synthClank(r: Random): FloatArray {
+            val out = buf(0.8f)
+            val base = 480f + r.nextFloat() * 80f
+            for ((mul, g) in listOf(1f to 0.35f, 2.76f to 0.25f, 5.4f to 0.18f, 8.93f to 0.12f)) {
+                ping(out, 0f, base * mul, 0.7f / (1f + mul * 0.15f), g)
+            }
+            noise(out, r, 0f, 0.04f, 3000f, 'h', 0.8f)
             return out
         }
 

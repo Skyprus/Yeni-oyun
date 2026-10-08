@@ -14,19 +14,28 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <LinearLayout
+    <HorizontalScrollView
         android:id="@+id/controls"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="bottom|center_horizontal"
         android:layout_marginBottom="12dp"
-        android:orientation="horizontal">
+        android:scrollbars="none">
 
-        <TextView android:id="@+id/btnBall" style="@style/Pill" android:text="@string/ammo_ball" />
-        <TextView android:id="@+id/btnStone" style="@style/Pill" android:text="@string/ammo_stone" />
-        <TextView android:id="@+id/btnMark" style="@style/Pill" android:text="@string/mark" />
-        <TextView android:id="@+id/btnBoxes" style="@style/Pill" android:text="@string/boxes" />
-    </LinearLayout>
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp">
+
+            <TextView android:id="@+id/btnBall" style="@style/Pill" android:text="@string/w_ball" />
+            <TextView android:id="@+id/btnStone" style="@style/Pill" android:text="@string/w_stone" />
+            <TextView android:id="@+id/btnBat" style="@style/Pill" android:text="@string/w_bat" />
+            <TextView android:id="@+id/btnWrench" style="@style/Pill" android:text="@string/w_wrench" />
+            <TextView android:id="@+id/btnBoxes" style="@style/Pill" android:text="@string/boxes" />
+        </LinearLayout>
+    </HorizontalScrollView>
 
     <LinearLayout
         android:id="@+id/permissionPanel"

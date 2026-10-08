@@ -80,7 +80,7 @@ class Detector private constructor(
 
     companion object {
         private const val TAG = "Detector"
-        private const val MODEL = "efficientdet_lite0.tflite"
+        private const val MODEL = "efficientdet_lite2.tflite"
 
         /**
          * Model int8 (işlemci için sıkıştırılmış) olduğundan CPU'da çalıştırılır; GPU delegesi
@@ -99,7 +99,7 @@ class Detector private constructor(
                         )
                         .setRunningMode(RunningMode.LIVE_STREAM)
                         .setMaxResults(15)
-                        .setScoreThreshold(0.3f)
+                        .setScoreThreshold(0.25f)
                         .setResultListener { result: ObjectDetectorResult, image: MPImage ->
                             holder?.handle(result, image)
                         }
