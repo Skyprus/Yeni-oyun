@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Kır Geç AR</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <video id="camera" playsinline muted autoplay></video>
+  <canvas id="fx"></canvas>
+
+  <div id="hud" class="hidden">
+    <div class="stat"><span>Puan</span><b id="score">0</b></div>
+    <div class="stat"><span>Kırılan</span><b id="broken">0</b></div>
+    <div class="stat"><span>Atış</span><b id="shots">0</b></div>
+    <div id="status" class="status">Model yükleniyor…</div>
+  </div>
+
+  <div id="controls" class="hidden">
+    <button id="ammoBall" class="ammo active" data-ammo="ball" aria-label="Top">⚽ Top</button>
+    <button id="ammoStone" class="ammo" data-ammo="stone" aria-label="Taş">🪨 Taş</button>
+    <button id="markBtn" class="ammo" aria-label="Hedef işaretle">⬚ Hedef çiz</button>
+    <button id="boxBtn" class="ammo" aria-label="Kutuları göster">👁</button>
+  </div>
+
+  <div id="start" class="overlay">
+    <div class="card">
+      <h1>Kır Geç <small>AR</small></h1>
+      <p>Telefonunun kamerasıyla etrafına bak. Oyun şişe, bardak, vazo, ekran gibi
+        <b>kırılabilir eşyaları</b> otomatik bulur.</p>
+      <ul>
+        <li>Ekranı <b>yukarı kaydır</b> → fırlat (hızlı kaydırma = güçlü atış)</li>
+        <li>Bir yere <b>dokun</b> → oraya at</li>
+        <li><b>Taş</b> küçük ama sert, <b>top</b> büyük ama yumuşak</li>
+        <li>Avize gibi tanınmayan bir şey mi var? <b>Hedef çiz</b> ile kendin işaretle</li>
+      </ul>
+      <button id="startBtn" class="primary">Kamerayı Aç ve Başla</button>
+      <p class="note">Gerçek hiçbir şey kırılmaz — sadece ekranda 😉</p>
+      <p id="error" class="error"></p>
+    </div>
+  </div>
+
+  <!-- TensorFlow.js + COCO-SSD nesne tanıma modeli -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,49 @@
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body {
+  margin: 0; height: 100%; overflow: hidden; background: #000; color: #fff;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  touch-action: none; user-select: none; -webkit-user-select: none;
+}
+#camera, #fx { position: fixed; inset: 0; width: 100%; height: 100%; }
+#camera { object-fit: cover; }
+.hidden { display: none !important; }
+
+#hud {
+  position: fixed; top: env(safe-area-inset-top, 0); left: 0; right: 0;
+  display: flex; flex-wrap: wrap; gap: 8px; padding: 10px 12px; pointer-events: none;
+}
+.stat {
+  background: rgba(0,0,0,.45); border-radius: 10px; padding: 4px 10px;
+  display: flex; flex-direction: column; align-items: center; min-width: 60px;
+}
+.stat span { font-size: 11px; opacity: .75; }
+.stat b { font-size: 20px; }
+.status {
+  flex-basis: 100%; font-size: 13px; background: rgba(0,0,0,.45);
+  border-radius: 8px; padding: 4px 10px; align-self: flex-start; width: max-content; max-width: 100%;
+}
+
+#controls {
+  position: fixed; left: 0; right: 0; bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; padding: 0 12px;
+}
+.ammo {
+  border: 2px solid rgba(255,255,255,.35); background: rgba(0,0,0,.5); color: #fff;
+  border-radius: 999px; padding: 8px 14px; font-size: 15px;
+}
+.ammo.active { border-color: #ffd23f; background: rgba(255,210,63,.25); }
+
+.overlay {
+  position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(circle at 50% 30%, #2a2f4a, #0b0c14); padding: 16px; overflow-y: auto;
+}
+.card { max-width: 420px; line-height: 1.45; }
+.card h1 { font-size: 40px; margin: 0 0 8px; }
+.card h1 small { font-size: 18px; color: #ffd23f; vertical-align: super; }
+.card ul { padding-left: 20px; }
+.primary {
+  width: 100%; border: 0; border-radius: 14px; padding: 16px; font-size: 18px; font-weight: 700;
+  background: linear-gradient(135deg, #ffd23f, #ff7b39); color: #1a1a1a; margin-top: 8px;
+}
+.note { opacity: .6; font-size: 13px; text-align: center; }
+.error { color: #ff7a7a; font-size: 14px; }
