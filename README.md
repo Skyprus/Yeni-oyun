@@ -31,6 +31,21 @@ Kamera izni yalnızca **HTTPS** (veya `localhost`) üzerinde çalışır.
 - **GitHub Pages**: Repo ayarlarında *Pages → Deploy from branch* seç. Telefondan `https://<kullanıcı>.github.io/Yeni-oyun/` adresini aç.
 - **Yerel**: `python3 -m http.server 8000`. Telefondan erişmek için HTTPS tüneli gerekir (ör. `npx localtunnel --port 8000` ya da `ngrok`).
 
+## Android uygulaması (native)
+`android/` klasöründe Kotlin ile yazılmış native sürüm var. Web sürümüne göre farkları:
+- Nesne tanıma **MediaPipe + EfficientDet-Lite0** ile telefonun GPU'sunda çalışır. TensorFlow.js'ten belirgin şekilde hızlıdır.
+- Kamera **CameraX** ile ana arka lensi doğrudan kullanır. Tarayıcı kısıtlamaları yoktur.
+- Sesler ve titreşim yerel olarak çalınır.
+
+**Kurulum:** Her push'ta GitHub Actions APK'yı derler ve *Releases* sayfasına koyar. Telefondan
+https://github.com/Skyprus/Yeni-oyun/releases/latest adresine gir, `KirGec.apk`'yı indirip aç.
+İlk seferde "bilinmeyen kaynaklardan yükleme" izni istenir.
+
+APK, repodaki test anahtarıyla (`android/app/debug.keystore`) imzalanır. Böylece yeni sürüm eskisinin
+üzerine kurulabilir. Play Store'a yüklemek için ayrı, gizli bir anahtar gerekir.
+
+Android Studio ile açmak için `android/` klasörünü aç.
+
 ## Sonraki adımlar (fikirler)
 - Gerçek 3D AR (WebXR hit-test) ile topun duvara/zemine çarpması
 - Daha fazla nesne türü için özel eğitilmiş model (avize, ayna, cam, tabak)

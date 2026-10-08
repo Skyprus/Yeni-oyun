@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Kırık cam üzerinde top -->
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeWidth="2"
+        android:pathData="M54,54 L30,34 M54,54 L80,30 M54,54 L84,62 M54,54 L62,86 M54,54 L26,70 M54,54 L44,24" />
+    <path android:fillColor="#FFFFFF" android:pathData="M54,54m-14,0a14,14 0,1 1,28 0a14,14 0,1 1,-28 0" />
+    <path android:fillColor="#222222" android:pathData="M54,47 L59,51 L57,57 L51,57 L49,51 Z" />
+</vector>
