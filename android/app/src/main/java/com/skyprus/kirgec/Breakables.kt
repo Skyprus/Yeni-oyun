@@ -23,6 +23,17 @@ val BREAKABLES: Map<String, Breakable> = mapOf(
     "toaster" to Breakable("Tost Mak.", 2, 200, Material.ELECTRONIC),
 )
 
+/** Kırılamayan ama sık görülen nesnelerin Türkçe adları (tanı satırı için). */
+val OTHER_LABELS: Map<String, String> = mapOf(
+    "person" to "insan", "chair" to "sandalye", "couch" to "kanepe", "bed" to "yatak",
+    "dining table" to "masa", "book" to "kitap", "refrigerator" to "buzdolabı", "sink" to "lavabo",
+    "oven" to "fırın", "dog" to "köpek", "cat" to "kedi", "backpack" to "sırt çantası",
+    "handbag" to "çanta", "umbrella" to "şemsiye", "teddy bear" to "oyuncak ayı", "scissors" to "makas",
+    "knife" to "bıçak", "spoon" to "kaşık", "fork" to "çatal", "toilet" to "klozet", "car" to "araba",
+    "bicycle" to "bisiklet", "bench" to "bank", "suitcase" to "bavul", "banana" to "muz", "apple" to "elma",
+    "orange" to "portakal", "sports ball" to "top",
+)
+
 val MANUAL_TARGET = Breakable("Hedef", 2, 150, Material.GLASS)
 
 enum class Ammo(

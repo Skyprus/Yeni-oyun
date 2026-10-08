@@ -17,7 +17,7 @@ import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetectorResult
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Kamera görüntüsündeki tek bir tespit (görüntü pikseli koordinatlarında). */
-data class Det(val cls: String, val box: RectF)
+data class Det(val cls: String, val box: RectF, val score: Float)
 
 /**
  * MediaPipe nesne tanıyıcı (EfficientDet-Lite0, COCO). Mümkünse GPU'da çalışır.
@@ -30,6 +30,8 @@ class Detector private constructor(
     private val busy = AtomicBoolean(false)
     private var lastTs = 0L
     var onResult: ((List<Det>, Int, Int) -> Unit)? = null
+    /** Son tahminin süresi (ms). */
+    @Volatile var lastMs = 0L
 
     /** CameraX analiz karesi: önceki tahmin bitmediyse kare atlanır (telefon yorulmaz). */
     fun analyze(proxy: ImageProxy) {
@@ -68,8 +70,9 @@ class Detector private constructor(
         busy.set(false)
         val dets = result.detections().mapNotNull { d ->
             val c = d.categories().firstOrNull() ?: return@mapNotNull null
-            Det(c.categoryName(), RectF(d.boundingBox()))
+            Det(c.categoryName(), RectF(d.boundingBox()), c.score())
         }
+        lastMs = SystemClock.uptimeMillis() - result.timestampMs()
         onResult?.invoke(dets, image.width, image.height)
     }
 
@@ -79,9 +82,12 @@ class Detector private constructor(
         private const val TAG = "Detector"
         private const val MODEL = "efficientdet_lite0.tflite"
 
-        /** Önce GPU, olmazsa CPU ile oluşturur. Model yüklenemezse null döner. */
+        /**
+         * Model int8 (işlemci için sıkıştırılmış) olduğundan CPU'da çalıştırılır; GPU delegesi
+         * bu modelde bazı telefonlarda hiç sonuç döndürmüyor. Model yüklenemezse null döner.
+         */
         fun create(context: Context): Detector? {
-            for (delegate in listOf(Delegate.GPU, Delegate.CPU)) {
+            for (delegate in listOf(Delegate.CPU)) {
                 try {
                     var holder: Detector? = null
                     val options = ObjectDetector.ObjectDetectorOptions.builder()
@@ -92,8 +98,8 @@ class Detector private constructor(
                                 .build()
                         )
                         .setRunningMode(RunningMode.LIVE_STREAM)
-                        .setMaxResults(10)
-                        .setScoreThreshold(0.35f)
+                        .setMaxResults(15)
+                        .setScoreThreshold(0.3f)
                         .setResultListener { result: ObjectDetectorResult, image: MPImage ->
                             holder?.handle(result, image)
                         }

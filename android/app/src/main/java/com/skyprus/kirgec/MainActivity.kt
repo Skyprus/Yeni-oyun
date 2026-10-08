@@ -15,7 +15,9 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
@@ -31,6 +33,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.core.view.updatePadding
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
     private lateinit var previewView: PreviewView
@@ -38,6 +41,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var sfx: Sfx
     private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     @Volatile private var detector: Detector? = null
+    private var camera: Camera? = null
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
@@ -65,6 +69,17 @@ class MainActivity : ComponentActivity() {
         game.shakeTarget = previewView
         game.frameProvider = { previewView.bitmap }
         game.haptics = { vibrate(it) }
+        game.onFocusRequest = { x, y -> focusAt(x, y) }
+        game.onZoom = { factor ->
+            camera?.let { cam ->
+                val z = cam.cameraInfo.zoomState.value
+                if (z != null) {
+                    val ratio = (z.zoomRatio * factor).coerceIn(z.minZoomRatio, z.maxZoomRatio)
+                    cam.cameraControl.setZoomRatio(ratio)
+                    game.status = "Yakınlaştırma: ${"%.1f".format(ratio)}x"
+                }
+            }
+        }
 
         val controls = findViewById<View>(R.id.controls)
         ViewCompat.setOnApplyWindowInsetsListener(game) { _, insets ->
@@ -98,9 +113,12 @@ class MainActivity : ComponentActivity() {
         // Model kamera açılırken arka planda yüklenir
         analysisExecutor.execute {
             val det = Detector.create(applicationContext)
-            det?.onResult = { dets, iw, ih -> game.post { game.ingest(dets, iw, ih) } }
+            det?.onResult = { dets, iw, ih ->
+                val ms = det?.lastMs ?: 0L
+                game.post { game.ingest(dets, iw, ih, ms) }
+            }
             detector = det
-            runOnUiThread { game.setModelReady(det != null, det?.usingGpu == true) }
+            runOnUiThread { game.setModelReady(det != null) }
         }
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
@@ -148,12 +166,24 @@ class MainActivity : ComponentActivity() {
             }
             try {
                 provider.unbindAll()
-                provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                camera = provider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                // Açılışta ortaya bir kez odaklan; sonra kamera sürekli otomatik odağa döner
+                previewView.post { focusAt(previewView.width / 2f, previewView.height / 2f) }
                 game.status = if (detector == null) "Nesne tanıma modeli yükleniyor…" else game.status
             } catch (e: Exception) {
                 game.status = "Kamera açılamadı: ${e.message}"
             }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun focusAt(x: Float, y: Float) {
+        val cam = camera ?: return
+        if (previewView.width == 0) return
+        val point = previewView.meteringPointFactory.createPoint(x, y)
+        val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
+            .setAutoCancelDuration(5, TimeUnit.SECONDS)
+            .build()
+        cam.cameraControl.startFocusAndMetering(action)
     }
 
     private fun vibrate(m: Material) {

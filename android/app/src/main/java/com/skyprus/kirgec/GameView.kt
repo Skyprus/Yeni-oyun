@@ -14,6 +14,7 @@ import android.graphics.Typeface
 import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import kotlin.math.PI
 import kotlin.math.cos
@@ -73,6 +74,12 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     var haptics: ((Material) -> Unit)? = null
     var shakeTarget: View? = null
     var onMarkModeChanged: ((Boolean) -> Unit)? = null
+    /** Uzun basınca o noktaya odaklan (ekran koordinatı). */
+    var onFocusRequest: ((Float, Float) -> Unit)? = null
+    /** İki parmakla yakınlaştırma: çarpan. */
+    var onZoom: ((Float) -> Unit)? = null
+    /** Tanı satırı: modelin gördüğü her şey, tahmin süresi. */
+    var info = ""
     var insetTop = 0
 
     var ammo = Ammo.BALL
@@ -123,10 +130,10 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
 
     // ---------- Model durumu ve tespitler ----------
 
-    fun setModelReady(ok: Boolean, gpu: Boolean) {
+    fun setModelReady(ok: Boolean) {
         modelState = if (ok) 1 else -1
         status = if (ok) {
-            "Kırılabilir eşya aranıyor… (şişe, bardak, vazo, ekran…)" + if (gpu) "" else " [CPU]"
+            "Kırılabilir eşya aranıyor… (şişe, bardak, vazo, ekran…)"
         } else {
             "Nesne tanıma başlatılamadı — \"Hedef çiz\" ile kendin işaretle."
         }
@@ -141,8 +148,10 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     }
 
     /** Ana iş parçacığında çağrılır. Kutular görüntü piksellerindedir (iw x ih). */
-    fun ingest(dets: List<Det>, iw: Int, ih: Int) {
+    fun ingest(dets: List<Det>, iw: Int, ih: Int, ms: Long) {
         imgW = iw; imgH = ih
+        info = "Tanıma ${ms} ms · görülen: " + if (dets.isEmpty()) "—" else dets.sortedByDescending { it.score }
+            .joinToString(", ") { (BREAKABLES[it.cls]?.label ?: OTHER_LABELS[it.cls] ?: it.cls) + " " + (it.score * 100).toInt() + "%" }
         if (width == 0 || height == 0) return
         val now = SystemClock.uptimeMillis()
         val scale = max(width / iw.toFloat(), height / ih.toFloat())
@@ -188,7 +197,32 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
 
     // ---------- Girdi ----------
 
+    private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScale(det: ScaleGestureDetector): Boolean {
+            onZoom?.invoke(det.scaleFactor)
+            return true
+        }
+    })
+    private var focusRing: FloatArray? = null // x, y
+    private var focusT = 0L
+    private val longPress = Runnable {
+        if (pointerDown) {
+            pointerDown = false
+            focusRing = floatArrayOf(downX, downY)
+            focusT = SystemClock.uptimeMillis()
+            onFocusRequest?.invoke(downX, downY)
+        }
+    }
+
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        scaleDetector.onTouchEvent(e)
+        if (e.pointerCount > 1 || scaleDetector.isInProgress) {
+            // İki parmak: yakınlaştırma, atış değil
+            pointerDown = false
+            drawing = null
+            removeCallbacks(longPress)
+            return true
+        }
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 if (markMode) {
@@ -196,16 +230,19 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
                     drawing = RectF(e.x, e.y, e.x, e.y)
                 } else {
                     downX = e.x; downY = e.y; downT = SystemClock.uptimeMillis(); pointerDown = true
+                    postDelayed(longPress, 450)
                 }
             }
-            MotionEvent.ACTION_MOVE -> drawing?.set(
-                min(drawStartX, e.x), min(drawStartY, e.y), max(drawStartX, e.x), max(drawStartY, e.y),
-            )
+            MotionEvent.ACTION_MOVE -> {
+                drawing?.set(min(drawStartX, e.x), min(drawStartY, e.y), max(drawStartX, e.x), max(drawStartY, e.y))
+                if (hypot(e.x - downX, e.y - downY) > 12 * d) removeCallbacks(longPress)
+            }
             MotionEvent.ACTION_UP -> {
+                removeCallbacks(longPress)
                 performClick()
                 onUp(e.x, e.y)
             }
-            MotionEvent.ACTION_CANCEL -> { pointerDown = false; drawing = null }
+            MotionEvent.ACTION_CANCEL -> { pointerDown = false; drawing = null; removeCallbacks(longPress) }
         }
         return true
     }
@@ -388,6 +425,7 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private val hudSmall = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(190, 255, 255, 255) ; textAlign = Paint.Align.CENTER }
     private val hudBig = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; typeface = Typeface.DEFAULT_BOLD; textAlign = Paint.Align.CENTER }
     private val hudStatus = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+    private val hudInfo = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(200, 200, 230, 255) }
     private val ammoPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val darkPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF222222.toInt() }
     private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(64, 0, 0, 0) }
@@ -444,6 +482,15 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             c.drawRect(it, selectPaint)
         }
         if (!markMode) drawHand(c, now)
+        focusRing?.let { f ->
+            val age = now - focusT
+            if (age > 900) focusRing = null else {
+                markerPaint.color = 0xFFFFD23F.toInt()
+                markerPaint.alpha = (255 * (1f - age / 900f)).toInt().coerceIn(0, 255)
+                markerPaint.strokeWidth = 2 * d
+                c.drawCircle(f[0], f[1], (40 - 12 * min(1f, age / 250f)) * d, markerPaint)
+            }
+        }
 
         for (u in popups) {
             val a = (min(1f, 2f * (1.3f - u.age)) * 255).toInt().coerceIn(0, 255)
@@ -565,5 +612,18 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         tmpRect.set(12 * d, sy, 12 * d + hudStatus.measureText(text) + 20 * d, sy + 26 * d)
         c.drawRoundRect(tmpRect, 8 * d, 8 * d, hudBg)
         c.drawText(text, 22 * d, sy + 18 * d, hudStatus)
+
+        if (info.isNotEmpty()) {
+            hudInfo.textSize = 11 * d
+            var t2 = info
+            if (hudInfo.measureText(t2) > maxW) {
+                val n = hudInfo.breakText(t2, true, maxW - hudInfo.measureText("…"), null)
+                t2 = t2.substring(0, n) + "…"
+            }
+            val iy = sy + 32 * d
+            tmpRect.set(12 * d, iy, 12 * d + hudInfo.measureText(t2) + 16 * d, iy + 20 * d)
+            c.drawRoundRect(tmpRect, 6 * d, 6 * d, hudBg)
+            c.drawText(t2, 20 * d, iy + 14 * d, hudInfo)
+        }
     }
 }

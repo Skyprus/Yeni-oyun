@@ -13,6 +13,8 @@ android {
         targetSdk = 34
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "0.1." + (System.getenv("GITHUB_RUN_NUMBER") ?: "0")
+        // Yalnızca telefon işlemcileri: APK boyutu yarıya iner
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     // Sabit imza: her derlemede aynı anahtar kullanılır, böylece yeni APK eskisinin üzerine kurulabilir.
