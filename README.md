@@ -11,18 +11,19 @@ Gerçekte hiçbir şey kırılmaz. Her şey ekranda olur.
 - **Top**: büyük, isabet alanı geniş, 1 hasar. **Taş**: küçük, hızlı, 2 hasar.
 - Televizyon, laptop gibi sağlam eşyalar birkaç vuruşta kırılır. Önce çatlar, sonra dağılır.
 - Avize gibi modelin tanımadığı bir şey varsa **Hedef çiz** ile parmağınla etrafına kutu çiz.
+- Görüntü bulanıksa **📷** ile diğer arka kameraya geç (bazı telefonlar önce geniş açı lensi açar).
 - Kırılan eşya 6 saniye "yok" görünür, sonra yeniden hedef olur.
 
 ## Nasıl çalışır
 | Parça | Teknoloji |
 |---|---|
-| Kamera | `getUserMedia` (arka kamera) |
-| Nesne tanıma | TensorFlow.js + COCO-SSD (`lite_mobilenet_v2`), tamamen telefonda çalışır |
+| Kamera | `getUserMedia` (arka kamera, 1080p, sürekli odak). 📷 düğmesi arka lensler arasında geçiş yapar |
+| Nesne tanıma | TensorFlow.js + COCO-SSD (`lite_mobilenet_v2`), tamamen telefonda ve ayrı bir iş parçacığında (Web Worker) çalışır, böylece animasyon takılmaz |
 | Kırılma efekti | Nesnenin o anki kamera görüntüsü kesilir, çarpma noktasından radyal parçalara bölünür, fizikle saçılır. Nesnenin yeri zemin rengiyle örtülür ve altına enkaz çizilir. |
 | Ses | WebAudio ile sentezlenen cam/elektronik kırılma sesleri, titreşim |
 
 Dosyalar: `index.html`, `style.css`, `js/main.js` (oyun döngüsü, takip, atış),
-`js/shatter.js` (parçalanma), `js/audio.js` (sesler).
+`js/detector-worker.js` (nesne tanıma), `js/shatter.js` (parçalanma), `js/audio.js` (sesler).
 
 ## Çalıştırma
 Kamera izni yalnızca **HTTPS** (veya `localhost`) üzerinde çalışır.

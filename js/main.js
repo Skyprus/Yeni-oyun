@@ -41,7 +41,7 @@ const ctx = canvas.getContext('2d');
 const state = {
   W: 0, H: 0, dpr: 1,
   map: { scale: 1, ox: 0, oy: 0 },
-  model: null,
+  modelReady: false,
   targets: [],          // {id, cls, x,y,w,h, hp, lastSeen, manual, cracks, brokenUntil, wreck}
   projectiles: [],
   shards: [],
@@ -85,12 +85,7 @@ async function start() {
   $('error').textContent = '';
   initAudio();
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-    });
-    video.srcObject = stream;
-    await video.play();
+    await openCamera();
   } catch (e) {
     $('error').textContent = 'Kameraya erişilemedi: ' + (e.message || e.name) +
       '. Sayfanın HTTPS üzerinden açıldığından ve kamera izni verildiğinden emin ol.';
@@ -102,37 +97,170 @@ async function start() {
   resize();
   requestAnimationFrame(loop);
   loadModel();
+  listBackCameras();
 }
 
-async function loadModel() {
+// ---------- Kamera ----------
+const cam = { stream: null, devices: [], index: -1 };
+
+async function openCamera(deviceId) {
+  cam.stream?.getTracks().forEach((t) => t.stop());
+  // Yüksek çözünürlük iste: düşük çözünürlük tam ekrana büyütülünce bulanık görünür
+  const video_ = { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } };
+  if (deviceId) video_.deviceId = { exact: deviceId };
+  else video_.facingMode = { ideal: 'environment' };
+  cam.stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: video_ });
+  video.srcObject = cam.stream;
+  await video.play();
+  const track = cam.stream.getVideoTracks()[0];
+  // Destekleniyorsa sürekli otomatik odak/pozlama
+  const caps = track.getCapabilities?.() || {};
+  const adv = {};
+  if (caps.focusMode?.includes('continuous')) adv.focusMode = 'continuous';
+  if (caps.exposureMode?.includes('continuous')) adv.exposureMode = 'continuous';
+  if (caps.whiteBalanceMode?.includes('continuous')) adv.whiteBalanceMode = 'continuous';
+  if (Object.keys(adv).length) track.applyConstraints({ advanced: [adv] }).catch(() => {});
+  updateMap();
+  return track.getSettings?.().deviceId;
+}
+
+// Bazı telefonlar varsayılan olarak geniş açı (daha bulanık) lensi açar; kullanıcı lensler arasında geçebilsin
+async function listBackCameras() {
+  try {
+    const all = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+    const back = all.filter((d) => /back|rear|arka|environment|camera2 0/i.test(d.label));
+    cam.devices = back.length ? back : all;
+    const current = cam.stream.getVideoTracks()[0].getSettings?.().deviceId;
+    cam.index = Math.max(0, cam.devices.findIndex((d) => d.deviceId === current));
+    $('camBtn').classList.toggle('hidden', cam.devices.length < 2);
+  } catch (_) { /* önemsiz */ }
+}
+
+async function nextCamera() {
+  if (cam.devices.length < 2) return;
+  cam.index = (cam.index + 1) % cam.devices.length;
+  const d = cam.devices[cam.index];
+  try {
+    await openCamera(d.deviceId);
+    setStatus(`Kamera: ${d.label || 'Kamera ' + (cam.index + 1)}`);
+  } catch (_) {
+    setStatus('Bu kamera açılamadı, başka birini dene.');
+  }
+}
+
+// ---------- Nesne tanıma ----------
+// Model küçültülmüş kareyle beslenir (model zaten 300x300'e indirger); bu hem hızlı hem de veri kopyalamayı azaltır.
+const DETECT_SIZE = 400;
+const det = { worker: null, busy: false, canvas: document.createElement('canvas'), ratio: 1, mainModel: null };
+
+function loadModel() {
+  try {
+    det.worker = new Worker('js/detector-worker.js');
+  } catch (_) {
+    return loadMainThreadModel();
+  }
+  det.worker.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === 'ready') {
+      setStatus('Kırılabilir eşya aranıyor… (şişe, bardak, vazo, ekran…)');
+      state.modelReady = true;
+      scheduleDetect(0);
+    } else if (m.type === 'result') {
+      det.busy = false;
+      ingest(m.preds.map((p) => ({ ...p, bbox: p.bbox.map((v) => v * det.ratio) })));
+      // Telefonu yormamak için tahmin süresine göre bekle
+      scheduleDetect(Math.max(80, m.ms * 0.75));
+    } else if (m.type === 'error') {
+      det.worker.terminate();
+      det.worker = null;
+      loadMainThreadModel();
+    }
+  };
+  det.worker.onerror = () => {
+    det.worker?.terminate();
+    det.worker = null;
+    loadMainThreadModel();
+  };
+  det.worker.postMessage({ type: 'init' });
+}
+
+// Worker desteklenmezse yedek: ana iş parçacığında, daha seyrek
+const TF_URLS = [
+  'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js',
+  'https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js',
+];
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src;
+    el.onload = resolve;
+    el.onerror = reject;
+    document.head.appendChild(el);
+  });
+}
+
+async function loadMainThreadModel() {
+  try {
+    for (const src of TF_URLS) await loadScript(src);
+  } catch (_) { /* aşağıda ele alınır */ }
   if (!window.cocoSsd) {
     setStatus('Nesne tanıma yüklenemedi — "Hedef çiz" ile kendin işaretleyebilirsin.');
     return;
   }
   try {
-    state.model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+    det.mainModel = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+    state.modelReady = true;
     setStatus('Kırılabilir eşya aranıyor… (şişe, bardak, vazo, ekran…)');
-    detectLoop();
+    scheduleDetect(0);
   } catch (e) {
     setStatus('Model yüklenemedi — "Hedef çiz" ile kendin işaretle.');
   }
 }
 
-function setStatus(t) { $('status').textContent = t; }
-
-// ---------- Nesne tanıma ve takip ----------
-async function detectLoop() {
-  const t0 = performance.now();
-  if (video.readyState >= 2) {
-    try {
-      const preds = await state.model.detect(video, 20, 0.4);
-      ingest(preds);
-    } catch (_) { /* tek kare hatası önemsiz */ }
-  }
-  const spent = performance.now() - t0;
-  setTimeout(detectLoop, Math.max(0, 120 - spent));
+function scheduleDetect(ms) {
+  setTimeout(detectStep, ms);
 }
 
+function grabSmallFrame() {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const k = Math.min(1, DETECT_SIZE / Math.max(vw, vh));
+  const w = Math.round(vw * k), h = Math.round(vh * k);
+  if (det.canvas.width !== w || det.canvas.height !== h) { det.canvas.width = w; det.canvas.height = h; }
+  det.canvas.getContext('2d').drawImage(video, 0, 0, w, h);
+  det.ratio = vw / w;
+  return det.canvas;
+}
+
+async function detectStep() {
+  if (det.busy) return;
+  // Sekme arka plandaysa veya video hazır değilse bekle
+  if (document.hidden || video.readyState < 2 || !video.videoWidth) return scheduleDetect(300);
+  det.busy = true;
+  const frame = grabSmallFrame();
+  if (det.worker) {
+    try {
+      const bitmap = await createImageBitmap(frame);
+      det.worker.postMessage({ type: 'detect', bitmap }, [bitmap]);
+    } catch (_) {
+      det.busy = false;
+      scheduleDetect(300);
+    }
+    return;
+  }
+  const t0 = performance.now();
+  try {
+    const preds = await det.mainModel.detect(frame, 20, 0.4);
+    ingest(preds.map((p) => ({ ...p, bbox: p.bbox.map((v) => v * det.ratio) })));
+  } catch (_) { /* tek kare hatası önemsiz */ }
+  det.busy = false;
+  // Ana iş parçacığında çalışırken zamanın çoğunu animasyona bırak
+  scheduleDetect(Math.max(250, (performance.now() - t0) * 3));
+}
+
+function setStatus(t) { $('status').textContent = t; }
+
+// ---------- Takip ----------
 function iou(a, b) {
   const x1 = Math.max(a.x, b.x), y1 = Math.max(a.y, b.y);
   const x2 = Math.min(a.x + a.w, b.x + b.w), y2 = Math.min(a.y + a.h, b.y + b.h);
@@ -169,7 +297,7 @@ function ingest(preds) {
   }
   state.targets = state.targets.filter((t) => t.manual || now - t.lastSeen < LOST_MS || (t.wreck && now < t.wreck.until));
   const live = state.targets.filter((t) => !isBroken(t, now)).length;
-  if (state.model) {
+  if (state.modelReady) {
     setStatus(live ? `${live} kırılabilir hedef görüldü — at!` : 'Kırılabilir eşya aranıyor… (şişe, bardak, vazo, ekran…)');
   }
 }
@@ -303,6 +431,11 @@ function burst(x, y, n, colors, speed) {
 }
 
 function popup(x, y, text, color) {
+  // Yazı ekrandan taşmasın
+  ctx.font = 'bold 22px system-ui, sans-serif';
+  const half = ctx.measureText(text).width / 2 + 8;
+  x = Math.max(half, Math.min(state.W - half, x));
+  y = Math.max(110, Math.min(state.H - 140, y));
   state.popups.push({ x, y, text, color, age: 0 });
 }
 
@@ -349,7 +482,7 @@ function render(now) {
   if (state.shake > 0.3) {
     ctx.translate((Math.random() - 0.5) * state.shake, (Math.random() - 0.5) * state.shake);
     // Kamera görüntüsünü de salla
-    video.style.transform = `translate(${(Math.random() - 0.5) * state.shake}px, ${(Math.random() - 0.5) * state.shake}px)`;
+    video.style.transform = `translate(${Math.round((Math.random() - 0.5) * state.shake)}px, ${Math.round((Math.random() - 0.5) * state.shake)}px)`;
   } else if (video.style.transform) {
     video.style.transform = '';
   }
@@ -509,6 +642,7 @@ for (const btn of document.querySelectorAll('[data-ammo]')) {
     document.querySelectorAll('[data-ammo]').forEach((b) => b.classList.toggle('active', b === btn));
   });
 }
+$('camBtn').addEventListener('click', nextCamera);
 $('markBtn').addEventListener('click', () => setMarkMode(!state.markMode));
 $('boxBtn').addEventListener('click', () => {
   state.showBoxes = !state.showBoxes;
