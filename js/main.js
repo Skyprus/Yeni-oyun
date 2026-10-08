@@ -87,8 +87,7 @@ async function start() {
   try {
     await openCamera();
   } catch (e) {
-    $('error').textContent = 'Kameraya erişilemedi: ' + (e.message || e.name) +
-      '. Sayfanın HTTPS üzerinden açıldığından ve kamera izni verildiğinden emin ol.';
+    $('error').textContent = cameraErrorText(e);
     return;
   }
   $('start').classList.add('hidden');
@@ -101,15 +100,56 @@ async function start() {
 }
 
 // ---------- Kamera ----------
+function cameraErrorText(e) {
+  const name = e && e.name;
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return 'Kamera izni verilmedi. Adres çubuğundaki kilit simgesinden kamera iznini aç ve sayfayı yenile.';
+  }
+  if (name === 'NotReadableError' || name === 'AbortError' || name === 'TrackStartError') {
+    return 'Kamera başlatılamadı: başka bir uygulama (kamera, görüntülü arama vb.) kullanıyor olabilir. ' +
+      'O uygulamaları kapatıp tekrar dene. Olmazsa sayfayı Chrome\'da aç (⋮ → Chrome\'da aç).';
+  }
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') return 'Bu cihazda kullanılabilir kamera bulunamadı.';
+  return 'Kameraya erişilemedi: ' + ((e && (e.message || e.name)) || e) + '. Sayfanın HTTPS üzerinden açıldığından emin ol.';
+}
+
 const cam = { stream: null, devices: [], index: -1 };
+
+// Bazı Android telefonlar desteklemediği çözünürlük istenince kamerayı hiç açmaz
+// ("Could not start video source"). Bu yüzden önce güvenli ayarlarla açılır,
+// olmazsa ayarlar gevşetilir; çözünürlük açıldıktan sonra yükseltilmeye çalışılır.
+const CAMERA_TRIES = [
+  { width: { ideal: 1280 }, height: { ideal: 720 } },
+  {},
+];
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function getStream(deviceId) {
+  let lastErr;
+  for (const extra of CAMERA_TRIES) {
+    for (const withFacing of deviceId ? [false] : [true, false]) {
+      const v = { ...extra };
+      if (deviceId) v.deviceId = { exact: deviceId };
+      else if (withFacing) v.facingMode = { ideal: 'environment' };
+      try {
+        return await navigator.mediaDevices.getUserMedia({ audio: false, video: Object.keys(v).length ? v : true });
+      } catch (e) {
+        lastErr = e;
+        // İzin reddi tekrar denemekle düzelmez
+        if (e.name === 'NotAllowedError' || e.name === 'SecurityError') throw e;
+        // Kamera az önce bırakıldıysa (ör. lens değiştirme) donanımın kendine gelmesini bekle
+        await sleep(300);
+      }
+    }
+  }
+  throw lastErr;
+}
 
 async function openCamera(deviceId) {
   cam.stream?.getTracks().forEach((t) => t.stop());
-  // Yüksek çözünürlük iste: düşük çözünürlük tam ekrana büyütülünce bulanık görünür
-  const video_ = { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } };
-  if (deviceId) video_.deviceId = { exact: deviceId };
-  else video_.facingMode = { ideal: 'environment' };
-  cam.stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: video_ });
+  cam.stream = null;
+  cam.stream = await getStream(deviceId);
   video.srcObject = cam.stream;
   await video.play();
   const track = cam.stream.getVideoTracks()[0];
@@ -119,9 +159,35 @@ async function openCamera(deviceId) {
   if (caps.focusMode?.includes('continuous')) adv.focusMode = 'continuous';
   if (caps.exposureMode?.includes('continuous')) adv.exposureMode = 'continuous';
   if (caps.whiteBalanceMode?.includes('continuous')) adv.whiteBalanceMode = 'continuous';
-  if (Object.keys(adv).length) track.applyConstraints({ advanced: [adv] }).catch(() => {});
+  if (Object.keys(adv).length) await track.applyConstraints({ advanced: [adv] }).catch(() => {});
+  upgradeResolution(track, caps);
   updateMap();
-  return track.getSettings?.().deviceId;
+}
+
+// Kamera çalışırken çözünürlüğü yükseltmeyi dene: başarısız olursa görüntü eski ayarda devam eder
+async function upgradeResolution(track, caps) {
+  const s = track.getSettings?.() || {};
+  const maxW = caps.width?.max || 1920, maxH = caps.height?.max || 1080;
+  const long = Math.min(1920, Math.max(maxW, maxH)), short = Math.min(1080, Math.min(maxW, maxH));
+  if (!s.width || Math.max(s.width, s.height) >= long) return;
+  const landscape = s.width >= s.height;
+  const before = video.currentTime;
+  try {
+    await track.applyConstraints({
+      width: { ideal: landscape ? long : short },
+      height: { ideal: landscape ? short : long },
+    });
+  } catch (_) {
+    return;
+  }
+  // Bazı cihazlarda görüntü donabilir: donarsa güvenli ayarlarla yeniden aç
+  await sleep(1500);
+  if (track.readyState === 'ended' || (video.currentTime === before && !video.paused)) {
+    try {
+      await track.applyConstraints({ width: { ideal: 1280 }, height: { ideal: 720 } });
+    } catch (_) { /* önemsiz */ }
+  }
+  updateMap();
 }
 
 // Bazı telefonlar varsayılan olarak geniş açı (daha bulanık) lensi açar; kullanıcı lensler arasında geçebilsin
@@ -144,7 +210,8 @@ async function nextCamera() {
     await openCamera(d.deviceId);
     setStatus(`Kamera: ${d.label || 'Kamera ' + (cam.index + 1)}`);
   } catch (_) {
-    setStatus('Bu kamera açılamadı, başka birini dene.');
+    setStatus('Bu kamera açılamadı, varsayılan kameraya dönülüyor.');
+    await openCamera().catch(() => setStatus('Kamera açılamadı. Sayfayı yenile.'));
   }
 }
 
@@ -632,6 +699,7 @@ function setMarkMode(on) {
 $('startBtn').addEventListener('click', start);
 window.addEventListener('resize', resize);
 video.addEventListener('loadedmetadata', updateMap);
+video.addEventListener('resize', updateMap);
 canvas.addEventListener('pointerdown', onDown);
 canvas.addEventListener('pointermove', onMove);
 canvas.addEventListener('pointerup', onUp);
