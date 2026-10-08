@@ -47,3 +47,4 @@ html, body {
 }
 .note { opacity: .6; font-size: 13px; text-align: center; }
 .error { color: #ff7a7a; font-size: 14px; }
+.ver { font-size: 11px; opacity: .7; }

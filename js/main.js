@@ -1,8 +1,8 @@
-import { initAudio, playShatter, playHit, playMiss, playThrow } from './audio.js';
+import { initAudio, playShatter, playHit, playMiss, playThrow } from './audio.js?v=5';
 import {
   snapshot, makeShards, updateShards, drawShards,
   makeCracks, drawCracks, makeDebris, drawWreck,
-} from './shatter.js';
+} from './shatter.js?v=5';
 
 // COCO-SSD sınıflarından kırılabilir sayılanlar
 const BREAKABLE = {
@@ -82,14 +82,19 @@ function updateMap() {
 }
 
 async function start() {
+  if (state.started || state.starting) return;
+  state.starting = true;
   $('error').textContent = '';
   initAudio();
   try {
     await openCamera();
   } catch (e) {
-    $('error').textContent = cameraErrorText(e);
+    state.starting = false;
+    $('error').textContent = cameraErrorText(e) + ` (${e && e.name || 'hata'})`;
+    $('startBtn').textContent = 'Tekrar dene';
     return;
   }
+  state.started = true;
   $('start').classList.add('hidden');
   $('hud').classList.remove('hidden');
   $('controls').classList.remove('hidden');
@@ -190,6 +195,23 @@ async function upgradeResolution(track, caps) {
   updateMap();
 }
 
+// Sayfa arka plandayken kamerayı bırak: Android'de kamerayı aynı anda tek sekme/uygulama
+// kullanabilir; açık kalan bir sekme diğerlerinin "Could not start video source" almasına yol açar.
+document.addEventListener('visibilitychange', async () => {
+  if (!state.started) return;
+  if (document.hidden) {
+    cam.stream?.getTracks().forEach((t) => t.stop());
+    cam.stream = null;
+  } else if (!cam.stream) {
+    try {
+      await openCamera(cam.devices[cam.index]?.deviceId);
+    } catch (_) {
+      await openCamera().catch(() => setStatus('Kamera yeniden açılamadı. Sayfayı yenile.'));
+    }
+  }
+});
+window.addEventListener('pagehide', () => cam.stream?.getTracks().forEach((t) => t.stop()));
+
 // Bazı telefonlar varsayılan olarak geniş açı (daha bulanık) lensi açar; kullanıcı lensler arasında geçebilsin
 async function listBackCameras() {
   try {
@@ -222,7 +244,7 @@ const det = { worker: null, busy: false, canvas: document.createElement('canvas'
 
 function loadModel() {
   try {
-    det.worker = new Worker('js/detector-worker.js');
+    det.worker = new Worker('js/detector-worker.js?v=5');
   } catch (_) {
     return loadMainThreadModel();
   }
