@@ -21,7 +21,11 @@ import kotlin.random.Random
 
 private fun rand(a: Float, b: Float) = a + Random.nextFloat() * (b - a)
 
-/** Kamera görüntüsünden kesilmiş nesne parçası. */
+/**
+ * Kamera görüntüsünden kesilmiş nesne parçası. Sahte 3B: [z] kameraya yaklaşma (ölçek), [flip] parçanın
+ * kendi ekseni etrafında takla açısı (kenardan görününce incelir). Nesnenin durduğu yüzeye ([floorY])
+ * düşer, seker, durur ve [restUntil]'e kadar orada kalır.
+ */
 class Shard(
     val img: Bitmap,
     val path: Path,
@@ -33,9 +37,17 @@ class Shard(
     var vy: Float,
     var vr: Float,
     val life: Float,
+    val floorY: Float,
+    var z: Float,
+    var vz: Float,
+    var flip: Float,
+    var vflip: Float,
+    val glint: Float,
+    val restUntil: Long,
 ) {
     var rot = 0f
     var age = 0f
+    var rested = false
 }
 
 /**
@@ -72,7 +84,12 @@ fun snapshot(frame: Bitmap, box: RectF): Cutout? {
 }
 
 /** Çarpma noktasından yayılan radyal kırık desenine göre parçalar üretir. */
-fun makeShards(cut: Cutout, impactX: Float, impactY: Float, power: Float, d: Float): List<Shard> {
+/**
+ * @param glint cam için 1 (ışıkta parlar), seramik 0.4, metal/plastik 0
+ * @param restMs yere düşen parçaların kalma süresi
+ */
+fun makeShards(cut: Cutout, impactX: Float, impactY: Float, power: Float, d: Float, glint: Float = 0.6f, restMs: Long = 6000L): List<Shard> {
+    val now = android.os.SystemClock.uptimeMillis()
     val img = cut.obj
     val box = cut.box
     val w = img.width.toFloat()
@@ -113,58 +130,118 @@ fun makeShards(cut: Cutout, impactX: Float, impactY: Float, power: Float, d: Flo
             val dy = cy - iy
             val dist = hypot(dx, dy).coerceAtLeast(1f)
             val speed = rand(150f, 520f) * power * d * (1.2f - min(1f, dist / bigR))
+            // Parçalar nesnenin tabanının biraz önüne/arkasına düşer; öne (kameraya) uçanlar daha aşağıya
+            val z0 = rand(-0.1f, 0.15f)
+            val vz = rand(-0.3f, 1.1f) * power
             out += Shard(
                 img, path, cx, cy,
                 x = box.left + cx, y = box.top + cy,
                 vx = dx / dist * speed + rand(-60f, 60f) * d,
                 vy = dy / dist * speed - rand(80f, 260f) * power * d,
-                vr = rand(-8f, 8f),
-                life = rand(1.1f, 1.8f),
+                vr = rand(-6f, 6f),
+                life = rand(2.2f, 3.2f),
+                floorY = box.bottom + rand(-0.04f, 0.18f) * box.height() + max(0f, vz) * 40f * d,
+                z = z0, vz = vz,
+                flip = rand(0f, 1f), vflip = rand(-9f, 9f),
+                glint = glint,
+                restUntil = now + restMs + Random.nextLong(0, 1500),
             )
         }
     }
     return out
 }
 
-fun updateShards(shards: MutableList<Shard>, dt: Float, floorY: Float, d: Float) {
+fun updateShards(shards: MutableList<Shard>, dt: Float, screenFloor: Float, d: Float) {
+    val now = android.os.SystemClock.uptimeMillis()
     val iter = shards.iterator()
     while (iter.hasNext()) {
         val s = iter.next()
         s.age += dt
-        s.vy += 1400f * d * dt
+        if (s.rested) {
+            if (now >= s.restUntil) iter.remove()
+            continue
+        }
+        val floor = min(s.floorY, screenFloor)
+        s.vy += 1500f * d * dt
         s.x += s.vx * dt
         s.y += s.vy * dt
+        s.z = (s.z + s.vz * dt).coerceIn(-0.4f, 1.4f)
+        s.vz *= 0.97f
         s.rot += s.vr * dt
-        if (s.y > floorY && s.vy > 0) {
-            s.vy *= -0.3f; s.vx *= 0.6f; s.vr *= 0.5f; s.y = floorY
+        s.flip += s.vflip * dt
+        if (s.y > floor && s.vy > 0) {
+            s.y = floor
+            s.vy *= -0.28f
+            s.vx *= 0.55f
+            s.vr *= 0.5f
+            s.vflip *= 0.4f
+            s.vz = 0f
+            if (kotlin.math.abs(s.vy) < 60f * d) {
+                // Yüzeyde yatar: yandan, eğik görünür
+                s.rested = true
+                s.flip = 1.15f + rand(-0.25f, 0.25f)
+            }
         }
-        if (s.age >= s.life) iter.remove()
+        if (s.age >= s.life && !s.rested) iter.remove()
     }
 }
 
-private val shardEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-    style = Paint.Style.STROKE
-    color = Color.argb(140, 255, 255, 255)
-    strokeWidth = 1.5f
-}
 private val shardPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+private val glintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    color = Color.WHITE
+    xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.ADD)
+}
+private val shardEdgeLight = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = Color.WHITE }
+private val shardShadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
+private val shadowOval = RectF()
 
-fun drawShards(c: Canvas, shards: List<Shard>) {
+fun drawShards(c: Canvas, shards: List<Shard>, d: Float) {
+    val now = android.os.SystemClock.uptimeMillis()
+    // Gölgeler: yüzeye yaklaştıkça koyulaşır
+    if (shards.size < 160) for (s in shards) {
+        val h = (min(s.floorY, 1e9f) - s.y).coerceAtLeast(0f)
+        val k = (1f - h / (180f * d)).coerceIn(0f, 1f)
+        if (k <= 0f) continue
+        val sz = 6f * d * (1f + s.z * 0.8f)
+        shardShadow.alpha = (70 * k * fade(s, now)).toInt()
+        shadowOval.set(s.x - sz * 1.6f, s.floorY - sz * 0.35f, s.x + sz * 1.6f, s.floorY + sz * 0.35f)
+        c.drawOval(shadowOval, shardShadow)
+    }
     for (s in shards) {
-        val a = (1f - (s.age / s.life).pow(3)).coerceIn(0f, 1f)
+        val a = fade(s, now)
+        if (a <= 0f) continue
         val alpha = (a * 255).toInt()
+        val persp = (1f + s.z * 0.7f).coerceIn(0.6f, 2.2f)
+        val fy = cos(s.flip)
         c.save()
         c.translate(s.x, s.y)
         c.rotate(Math.toDegrees(s.rot.toDouble()).toFloat())
+        c.scale(persp, persp * (if (kotlin.math.abs(fy) < 0.12f) 0.12f * kotlin.math.sign(fy + 1e-4f) else fy))
         c.save()
         c.clipPath(s.path)
         shardPaint.alpha = alpha
         c.drawBitmap(s.img, -s.lx, -s.ly, shardPaint)
+        // Işığı yakalayan yüzey: parça kameraya döndüğü anlarda parlar
+        if (s.glint > 0f) {
+            val g = (kotlin.math.abs(fy)).pow(12) * s.glint * if (s.rested) 0.35f + 0.25f * sin(now / 220f + s.lx) else 1f
+            if (g > 0.03f) {
+                glintPaint.alpha = (g * 150 * a).toInt().coerceIn(0, 255)
+                c.drawPaint(glintPaint)
+            }
+        }
         c.restore()
-        shardEdge.alpha = (alpha * 0.55f).toInt()
-        c.drawPath(s.path, shardEdge)
+        if (s.glint > 0.5f) {
+            shardEdgeLight.alpha = (alpha * 0.25f).toInt()
+            shardEdgeLight.strokeWidth = 1f / persp
+            c.drawPath(s.path, shardEdgeLight)
+        }
         c.restore()
     }
+}
+
+private fun fade(s: Shard, now: Long): Float = when {
+    s.rested -> ((s.restUntil - now) / 800f).coerceIn(0f, 1f)
+    else -> (1f - ((s.age - s.life + 0.4f) / 0.4f).coerceIn(0f, 1f))
 }
 
 // ---------- Çatlaklar ----------

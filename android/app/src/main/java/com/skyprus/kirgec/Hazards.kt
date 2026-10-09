@@ -17,7 +17,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
 
-/** Alev (0), duman (1) ya da kıvılcım (2) parçacığı. */
+/** Alev (0), açık duman (1), kıvılcım (2) ya da kara duman (3) parçacığı. */
 class FireParticle(
     var x: Float, var y: Float, var vx: Float, var vy: Float,
     val life: Float, val size: Float, val kind: Int,
@@ -42,6 +42,7 @@ class Fire(
     var exploded = false
     var loopStream = 0
     var emit = 0f
+    var intensity = 0f
 }
 
 /** Gökten düşen dev kaya. Düştükten sonra [until]'e kadar yerinde kalır. */
@@ -90,14 +91,16 @@ private val addPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply { xfermode = Porter
 private val emberPaint = Paint(Paint.ANTI_ALIAS_FLAG)
 private val spriteDst = RectF()
 
-fun drawFireParticles(c: Canvas, list: List<FireParticle>, flame: Bitmap, smoke: Bitmap) {
+fun drawFireParticles(c: Canvas, list: List<FireParticle>, flame: Bitmap, smoke: Bitmap, darkSmoke: Bitmap) {
     // Önce duman (normal karışım), sonra alevler ve kıvılcımlar (toplamalı, parlak)
-    for (p in list) if (p.kind == 1) {
+    for (p in list) if (p.kind == 1 || p.kind == 3) {
         val k = p.age / p.life
-        val s = p.size * (1f + k * 1.8f)
+        val s = p.size * (1f + k * 2.2f)
         spriteDst.set(p.x - s, p.y - s, p.x + s, p.y + s)
-        spritePaint.alpha = (150 * (1f - k)).toInt().coerceIn(0, 255)
-        c.drawBitmap(smoke, null, spriteDst, spritePaint)
+        // Duman önce yoğunlaşır, sonra dağılır
+        val a = if (k < 0.15f) k / 0.15f else 1f - (k - 0.15f) / 0.85f
+        spritePaint.alpha = ((if (p.kind == 3) 210 else 150) * a).toInt().coerceIn(0, 255)
+        c.drawBitmap(if (p.kind == 3) darkSmoke else smoke, null, spriteDst, spritePaint)
     }
     for (p in list) when (p.kind) {
         0 -> {

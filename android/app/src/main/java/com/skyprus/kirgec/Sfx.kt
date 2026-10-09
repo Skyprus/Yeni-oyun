@@ -34,10 +34,14 @@ class Sfx(context: Context) {
     init {
         val dir = File(context.cacheDir, "sfx").apply { mkdirs() }
         Thread {
+            // Oda yankısı alacak sesler (darbe, kırılma, patlama)
+            val roomy = setOf("shatter_glass", "shatter_ceramic", "shatter_electronic", "shatter_vehicle",
+                "hit", "bat", "clank", "impact", "explosion", "bounce", "miss")
             fun add(name: String, variants: Int, gen: (Random) -> FloatArray) {
                 repeat(variants) { i ->
-                    val f = File(dir, "${name}_$i.wav")
-                    writeWav(f, gen(Random(name.hashCode() * 31 + i)))
+                    val f = File(dir, "${name}_v2_$i.wav")
+                    val raw = gen(Random(name.hashCode() * 31 + i))
+                    writeWav(f, if (name in roomy) reverb(raw, if (name == "explosion") 0.35f else 0.22f) else raw)
                     val id = pool.load(f.path, 1)
                     synchronized(sounds) { sounds.getOrPut(name) { mutableListOf() }.add(id) }
                 }
@@ -319,6 +323,31 @@ class Sfx(context: Context) {
             }
             noise(out, r, 0f, 1.2f, 400f, 'l', 1.6f)
             noise(out, r, 0f, 0.15f, 2000f, 'b', 0.5f)
+            return out
+        }
+
+        /**
+         * Basit oda yankısı: farklı gecikmeli dört geri beslemeli tarak süzgeci (Schroeder).
+         * Sentez sesleri "kuru" olmaktan çıkar, gerçek bir mekânda çalıyormuş gibi duyulur.
+         */
+        fun reverb(dry: FloatArray, wet: Float): FloatArray {
+            val tail = (0.5f * SR).toInt()
+            val out = FloatArray(dry.size + tail)
+            for (i in dry.indices) out[i] = dry[i]
+            val acc = FloatArray(out.size)
+            for ((delaySec, fb) in listOf(0.0297f to 0.62f, 0.0371f to 0.6f, 0.0411f to 0.58f, 0.0437f to 0.56f)) {
+                val dl = (delaySec * SR).toInt()
+                val buf = FloatArray(out.size)
+                var lp = 0f
+                for (i in out.indices) {
+                    val x = if (i < dry.size) dry[i] else 0f
+                    val back = if (i >= dl) buf[i - dl] else 0f
+                    lp += 0.4f * (back - lp) // yüksek frekanslar daha hızlı söner
+                    buf[i] = x + lp * fb
+                    acc[i] += buf[i]
+                }
+            }
+            for (i in out.indices) out[i] += acc[i] * 0.25f * wet
             return out
         }
 

@@ -105,6 +105,17 @@ private class Particle(
     var age = 0f
 }
 
+/** Sahneyi aydınlatan geçici ışık (patlama). */
+private class Glow(val x: Float, val y: Float, val r: Float, val start: Long, val dur: Long, val color: Int, val peak: Float)
+
+/** Genişleyen şok dalgası / toz halkası. */
+private class Ring(val x: Float, val y: Float, val maxR: Float, val start: Long, val dur: Long, val color: Int)
+
+/** Zeminde yanık izi (0) ya da krater çatlakları (1). */
+private class Scorch(val x: Float, val y: Float, val rx: Float, val ry: Float, val until: Long, val kind: Int) {
+    val cracks = FloatArray(16) { Random.nextFloat() }
+}
+
 private class Popup(val x: Float, var y: Float, val text: String, val color: Int) {
     var age = 0f
 }
@@ -171,7 +182,12 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private val falling = ArrayList<Pair<Boulder, PendingHit>>()
     private val rocks = ArrayList<Boulder>()
     private val flameSprite = softSprite(0xFFFFF4C2.toInt(), 0xFFFF8A1E.toInt())
-    private val smokeSprite = softSprite(0xC0302C28.toInt(), 0x70403A34)
+    private val smokeSprite = softSprite(0xB0807A72.toInt(), 0x60706A62)
+    private val darkSmokeSprite = softSprite(0xF0161210.toInt(), 0x90201C18.toInt())
+    private val glows = ArrayList<Glow>()
+    private val rings = ArrayList<Ring>()
+    private val scorches = ArrayList<Scorch>()
+    private var punch = 0f
     private val particles = ArrayList<Particle>()
     private val popups = ArrayList<Popup>()
     private var score = 0
@@ -615,7 +631,15 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         val now = SystemClock.uptimeMillis()
         val electronic = info.material == Material.ELECTRONIC || info.material == Material.VEHICLE
         val box = RectF(target?.box ?: cut?.box ?: RectF(h.x - 40 * d, h.y - 40 * d, h.x + 40 * d, h.y + 40 * d))
-        if (cut != null) shards += makeShards(cut, h.x, h.y, h.weapon.power, d)
+        if (cut != null) {
+            val glint = when (info.material) {
+                Material.GLASS -> 1f
+                Material.CERAMIC -> 0.4f
+                Material.VEHICLE -> 0.3f
+                Material.ELECTRONIC -> 0.15f
+            }
+            shards += makeShards(cut, h.x, h.y, h.weapon.power, d, glint, WRECK_MS - 1000)
+        }
         val wreck = Wreck(
             now, now + WRECK_MS, cut?.bg ?: Color.DKGRAY,
             if (electronic) Color.argb(230, 40, 40, 45) else Color.argb(140, 200, 235, 245),
@@ -691,10 +715,10 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         )
     }
 
-    private fun spawnSmoke(x: Float, y: Float, scale: Float) {
+    private fun spawnSmoke(x: Float, y: Float, scale: Float, dark: Boolean = false) {
         fireParticles += FireParticle(
-            x, y, (Random.nextFloat() - 0.5f) * 24 * d, -(30 + Random.nextFloat() * 40) * d,
-            1.6f + Random.nextFloat() * 0.9f, (16 + Random.nextFloat() * 18) * d * scale, 1,
+            x, y, (Random.nextFloat() - 0.5f) * 24 * d, -(30 + Random.nextFloat() * 40) * d * if (dark) 1.4f else 1f,
+            (1.6f + Random.nextFloat() * 0.9f) * if (dark) 1.5f else 1f, (16 + Random.nextFloat() * 18) * d * scale, if (dark) 3 else 1,
         )
     }
 
@@ -725,6 +749,7 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
                 else -> 1f - 0.85f * ((el - f.igniteMs) / (f.until - f.start - f.igniteMs)).coerceIn(0f, 1f)
             }
             val scale = dst?.let { (it.width() / (140 * d)).coerceIn(0.7f, 2.2f) } ?: 1f
+            f.intensity = intensity
             f.emit += dt * 55f * intensity
             while (f.emit >= 1f) {
                 f.emit -= 1f
@@ -733,7 +758,10 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
                         ?: floatArrayOf(dst.left + Random.nextFloat() * dst.width(), dst.top + dst.height() * (0.35f + 0.65f * Random.nextFloat()))
                 } else floatArrayOf(f.x + (Random.nextFloat() - 0.5f) * 60 * d, f.y + (Random.nextFloat() - 0.5f) * 12 * d)
                 spawnFlame(p[0], p[1], scale)
-                if (Random.nextFloat() < 0.3f) spawnSmoke(p[0], p[1] - 20 * d * scale, scale)
+                if (f.exploded) {
+                    // Patlamadan sonra kalın, kara duman sütunu
+                    if (Random.nextFloat() < 0.55f) spawnSmoke(p[0], p[1] - 30 * d * scale, scale * 1.5f, dark = true)
+                } else if (Random.nextFloat() < 0.3f) spawnSmoke(p[0], p[1] - 20 * d * scale, scale)
                 if (Random.nextFloat() < 0.12f) spawnEmber(p[0], p[1], 120f)
             }
             if (!f.exploded && dst != null && el >= f.igniteMs) explode(f, dst)
@@ -766,10 +794,16 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         }
         repeat(25) { spawnSmoke(cx + (Random.nextFloat() - 0.5f) * dst.width(), cy, sc * 1.4f) }
         repeat(40) { spawnEmber(cx, cy, 420f) }
+        val size = max(dst.width(), dst.height())
+        glows += Glow(cx, cy, size * 3.5f, now, 900, 0xFFFFC070.toInt(), 0.9f)
+        rings += Ring(cx, cy, size * 2.2f, now, 450, Color.WHITE)
+        scorches += Scorch(cx, dst.bottom, dst.width() * 0.75f, dst.height() * 0.16f + 10 * d, f.until + 3000, 0)
+        repeat(18) { spawnSmoke(cx + (Random.nextFloat() - 0.5f) * dst.width(), cy - dst.height() * 0.3f, sc * 1.6f, dark = true) }
+        punch = 0.06f
         sfx?.explosion()
         haptics?.invoke(Material.VEHICLE)
         shake = 28f
-        flash = 0.6f
+        flash = 0.5f
     }
 
     /** Dokunulan noktaya gökten dev bir kaya düşer. */
@@ -796,6 +830,9 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         shake = 32f
         flash = 0.2f
         val groundY = b.restY + b.r * 0.6f
+        rings += Ring(b.x, groundY, b.r * 3f, now, 550, 0xFFC9B8A0.toInt())
+        scorches += Scorch(b.x, groundY, b.r * 1.5f, b.r * 0.35f, b.until, 1)
+        punch = 0.045f
         burst(b.x, groundY, 50, intArrayOf(0xFF9C8B74.toInt(), 0xFF6E6457.toInt(), 0xFFC9B8A0.toInt()), 420f)
         repeat(22) { spawnSmoke(b.x + (Random.nextFloat() - 0.5f) * b.r * 2.4f, groundY, 1.6f) }
         if (target != null) {
@@ -874,6 +911,10 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         }
         toLand.forEach { land(it.first, it.second) }
         rocks.removeAll { now >= it.until }
+        glows.removeAll { now - it.start > it.dur }
+        rings.removeAll { now - it.start > it.dur }
+        scorches.removeAll { now >= it.until }
+        punch *= kotlin.math.exp(-10f * dt)
         updateFires(dt, now)
         fireParticles.removeAll { p ->
             p.age += dt
@@ -951,6 +992,71 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private val pouchPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF4A3426.toInt() }
     private val aimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val flashPaint = Paint()
+    private val trailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; color = Color.argb(45, 255, 255, 255)
+    }
+    private val lightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        xfermode = android.graphics.PorterDuffXfermode(PorterDuff.Mode.ADD)
+    }
+    private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val scorchPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val crackPaint2 = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
+
+    /** Alevler ve patlamalar çevreyi turuncu ışıkla aydınlatır (toplamalı, titrek). */
+    private fun drawLights(c: Canvas, now: Long) {
+        for (f in fires) {
+            if (f.intensity <= 0.02f) continue
+            val dst = fireBox(f)
+            val cx = dst?.centerX() ?: f.x
+            val cy = dst?.let { it.top + it.height() * 0.6f } ?: f.y
+            val r = (dst?.let { max(it.width(), it.height()) * 1.7f } ?: (130 * d)) * (0.92f + 0.08f * sin(now / 70f + f.x))
+            val flick = 0.8f + 0.2f * sin(now / 53f) * sin(now / 97f + 1.3f)
+            val a = (110 * f.intensity * flick).toInt().coerceIn(0, 255)
+            lightPaint.shader = RadialGradient(cx, cy, r, intArrayOf(Color.argb(a, 255, 150, 50), Color.argb(a / 3, 255, 90, 20), 0), floatArrayOf(0f, 0.45f, 1f), Shader.TileMode.CLAMP)
+            c.drawCircle(cx, cy, r, lightPaint)
+        }
+        for (g in glows) {
+            val k = (now - g.start).toFloat() / g.dur
+            val a = (255 * g.peak * (1f - k).pow(2)).toInt().coerceIn(0, 255)
+            val r = g.r * (0.6f + 0.4f * k)
+            lightPaint.shader = RadialGradient(g.x, g.y, r,
+                intArrayOf(Color.argb(a, Color.red(g.color), Color.green(g.color), Color.blue(g.color)), Color.argb(a / 4, 255, 80, 20), 0),
+                floatArrayOf(0f, 0.4f, 1f), Shader.TileMode.CLAMP)
+            c.drawCircle(g.x, g.y, r, lightPaint)
+        }
+        for (rg in rings) {
+            val k = (now - rg.start).toFloat() / rg.dur
+            ringPaint.color = rg.color
+            ringPaint.alpha = (200 * (1f - k)).toInt().coerceIn(0, 255)
+            ringPaint.strokeWidth = (14 * (1f - k) + 1) * d
+            c.drawOval(rg.x - rg.maxR * k, rg.y - rg.maxR * k * 0.45f, rg.x + rg.maxR * k, rg.y + rg.maxR * k * 0.45f, ringPaint)
+        }
+    }
+
+    /** Zemindeki yanık lekesi ya da kayanın açtığı çatlaklı krater. */
+    private fun drawScorch(c: Canvas, s: Scorch, now: Long) {
+        val a = ((s.until - now) / 1500f).coerceIn(0f, 1f)
+        val col = if (s.kind == 0) Color.rgb(20, 12, 6) else Color.rgb(40, 34, 28)
+        scorchPaint.shader = RadialGradient(s.x, s.y, max(s.rx, s.ry),
+            intArrayOf(Color.argb((170 * a).toInt(), Color.red(col), Color.green(col), Color.blue(col)), Color.argb((90 * a).toInt(), Color.red(col), Color.green(col), Color.blue(col)), 0),
+            floatArrayOf(0f, 0.6f, 1f), Shader.TileMode.CLAMP)
+        c.save()
+        c.scale(1f, s.ry / s.rx, s.x, s.y)
+        c.drawCircle(s.x, s.y, s.rx, scorchPaint)
+        c.restore()
+        if (s.kind == 1) {
+            crackPaint2.color = Color.argb((150 * a).toInt(), 25, 20, 15)
+            crackPaint2.strokeWidth = 2 * d
+            for (i in 0 until 8) {
+                val ang = (i + s.cracks[i] * 0.6f) / 8f * 2f * PI.toFloat()
+                val len = s.rx * (0.9f + s.cracks[i + 8] * 0.8f)
+                val mx = s.x + cos(ang) * len * 0.55f
+                val my = s.y + sin(ang) * len * 0.55f * (s.ry / s.rx) + (s.cracks[i] - 0.5f) * 6 * d
+                c.drawLine(s.x + cos(ang) * s.rx * 0.5f, s.y + sin(ang) * s.ry * 0.5f, mx, my, crackPaint2)
+                c.drawLine(mx, my, s.x + cos(ang + 0.15f) * len, s.y + sin(ang + 0.15f) * len * (s.ry / s.rx), crackPaint2)
+            }
+        }
+    }
     private val tmpPath = Path()
     private val tmpRect = RectF()
 
@@ -967,6 +1073,17 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             shakeTarget?.translationY = 0f
         }
 
+        if (punch > 0.002f) {
+            c.scale(1f + punch, 1f + punch, width / 2f, height / 2f)
+            shakeTarget?.scaleX = 1f + punch
+            shakeTarget?.scaleY = 1f + punch
+        } else if (shakeTarget?.scaleX != 1f) {
+            shakeTarget?.scaleX = 1f
+            shakeTarget?.scaleY = 1f
+        }
+
+        // Zemin izleri: yanık ve krater
+        for (sc in scorches) drawScorch(c, sc, now)
         // Önce izler (nesnenin yerini örten doldurma), sonra hedef işaretleri
         for (w in looseWrecks) drawWreck(c, w, w.box, now, d)
         var order = 0
@@ -998,8 +1115,9 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             drawRock(c, b.x + off[0], b.restY + off[1], b.r, b.rot, b.shape, a, d)
         }
 
-        drawShards(c, shards)
-        drawFireParticles(c, fireParticles, flameSprite, smokeSprite)
+        drawShards(c, shards, d)
+        drawFireParticles(c, fireParticles, flameSprite, smokeSprite, darkSmokeSprite)
+        drawLights(c, now)
         // Düşen kayalar: hedefte büyüyen gölge, hız çizgileri
         for ((b, _) in falling) {
             val e = b.t * b.t
@@ -1033,6 +1151,18 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             val x = p.sx + (p.hit.x - p.sx) * e
             val y = p.sy + (p.hit.y - p.sy) * e - p.arc * 4f * e * (1f - e)
             val r = p.hit.weapon.radiusDp * d * (p.s0 + (p.s1 - p.s0) * e)
+            // Yüzeydeki gölge (yay olmadan düz yol) ve hareket izi
+            val gx = p.sx + (p.hit.x - p.sx) * e
+            val gy = p.sy + (p.hit.y - p.sy) * e + r * 0.9f
+            shadowPaint.alpha = (25 + 55 * e).toInt()
+            tmpRect.set(gx - r * 1.1f, gy - r * 0.3f, gx + r * 1.1f, gy + r * 0.3f)
+            c.drawOval(tmpRect, shadowPaint)
+            shadowPaint.alpha = 64
+            val pe = 1f - (1f - max(0f, p.t - 0.06f)).pow(1.6f)
+            val px0 = p.sx + (p.hit.x - p.sx) * pe
+            val py0 = p.sy + (p.hit.y - p.sy) * pe - p.arc * 4f * pe * (1f - pe)
+            trailPaint.strokeWidth = r * 1.1f
+            c.drawLine(px0, py0, x, y, trailPaint)
             drawAmmo(c, p.hit.weapon, x, y, r, p.spin)
         }
         for (b in drops) {

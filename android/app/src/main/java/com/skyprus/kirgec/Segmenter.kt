@@ -275,25 +275,49 @@ class Segmenter private constructor(private val seg: InteractiveSegmenter) {
             for (i in px.indices) if (!known[i]) {
                 r[i] = Color.red(fallback).toFloat(); g[i] = Color.green(fallback).toFloat(); b[i] = Color.blue(fallback).toFloat()
             }
-            // Yalnızca delik içinde birkaç yumuşatma geçişi
-            repeat(3) {
+            // Harmonik dolgu: delik, kenarlarındaki renkler arasında en pürüzsüz geçişle doldurulur
+            // (Laplace denklemi, yerinde Gauss-Seidel). Kenardan içe doldurmanın çizgi izlerini giderir.
+            repeat(300) {
                 for (y in 1 until h - 1) for (x in 1 until w - 1) {
                     val i = y * w + x
                     if (!hole[i]) continue
-                    r[i] = (r[i] * 4 + r[i - 1] + r[i + 1] + r[i - w] + r[i + w]) / 8f
-                    g[i] = (g[i] * 4 + g[i - 1] + g[i + 1] + g[i - w] + g[i + w]) / 8f
-                    b[i] = (b[i] * 4 + b[i - 1] + b[i + 1] + b[i - w] + b[i + w]) / 8f
+                    r[i] = (r[i - 1] + r[i + 1] + r[i - w] + r[i + w]) * 0.25f
+                    g[i] = (g[i - 1] + g[i + 1] + g[i - w] + g[i + w]) * 0.25f
+                    b[i] = (b[i - 1] + b[i + 1] + b[i - w] + b[i + w]) * 0.25f
                 }
             }
-            for (i in px.indices) {
-                if (!hole[i]) continue
-                val n = Random.nextInt(-4, 5)
-                px[i] = Color.rgb(
-                    (r[i] + n).roundToInt().coerceIn(0, 255),
-                    (g[i] + n).roundToInt().coerceIn(0, 255),
-                    (b[i] + n).roundToInt().coerceIn(0, 255),
+            // Doku: aynı satırda deliğin hemen dışındaki bölgenin ince ayrıntısı (piksel − 3x3 ortalaması)
+            // ayna gibi yansıtılarak eklenir; mermer damarı, kumaş dokusu gibi desenler kabaca devam eder.
+            fun hp(ch: Int, q: Int): Float {
+                val qx = q % w
+                val qy = q / w
+                if (qx < 1 || qy < 1 || qx >= w - 1 || qy >= h - 1) return 0f
+                var sum = 0
+                for (dy in -1..1) for (dx in -1..1) sum += (px[q + dy * w + dx] shr ch) and 0xFF
+                return ((px[q] shr ch) and 0xFF) - sum / 9f
+            }
+            val outPx = IntArray(px.size)
+            for (y in 0 until h) for (x in 0 until w) {
+                val i = y * w + x
+                if (!hole[i]) { outPx[i] = px[i]; continue }
+                var l = x
+                while (l >= 0 && hole[y * w + l]) l--
+                var rr = x
+                while (rr < w && hole[y * w + rr]) rr++
+                var src = -1
+                var best = Int.MAX_VALUE
+                if (l >= 0) { val m = l - (x - l); if (m >= 1 && x - l < best && !hole[y * w + m]) { best = x - l; src = y * w + m } }
+                if (rr < w) { val m = rr + (rr - x); if (m < w - 1 && rr - x < best && !hole[y * w + m]) { src = y * w + m } }
+                val tr = if (src >= 0) hp(16, src) * 0.85f else 0f
+                val tg = if (src >= 0) hp(8, src) * 0.85f else 0f
+                val tb = if (src >= 0) hp(0, src) * 0.85f else 0f
+                outPx[i] = Color.rgb(
+                    (r[i] + tr).roundToInt().coerceIn(0, 255),
+                    (g[i] + tg).roundToInt().coerceIn(0, 255),
+                    (b[i] + tb).roundToInt().coerceIn(0, 255),
                 )
             }
+            System.arraycopy(outPx, 0, px, 0, px.size)
         }
     }
 }
