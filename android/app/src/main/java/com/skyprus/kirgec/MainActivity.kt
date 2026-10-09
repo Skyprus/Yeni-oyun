@@ -38,6 +38,7 @@ import java.util.concurrent.TimeUnit
 class MainActivity : ComponentActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var game: GameView
+    private lateinit var hole: HoleView
     private lateinit var sfx: Sfx
     private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     @Volatile private var detector: Detector? = null
@@ -64,6 +65,7 @@ class MainActivity : ComponentActivity() {
 
         previewView = findViewById(R.id.preview)
         game = findViewById(R.id.game)
+        hole = findViewById(R.id.hole)
         // TextureView tabanlı mod: oyun katmanı üstte kalır ve kare yakalama (getBitmap) güvenilir çalışır
         previewView.implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
@@ -87,12 +89,16 @@ class MainActivity : ComponentActivity() {
         }
 
         val controls = findViewById<View>(R.id.controls)
+        val holeControls = findViewById<View>(R.id.holeControls)
         ViewCompat.setOnApplyWindowInsetsListener(game) { _, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             game.insetTop = bars.top
+            hole.insetTop = bars.top
             controls.updatePadding(bottom = bars.bottom)
+            holeControls.updatePadding(bottom = bars.bottom)
             insets
         }
+        setupHole(controls, holeControls)
 
         val weaponButtons = mapOf(
             Weapon.BALL to findViewById<TextView>(R.id.btnBall),
@@ -159,6 +165,46 @@ class MainActivity : ComponentActivity() {
         } else {
             permissionLauncher.launch(Manifest.permission.CAMERA)
         }
+    }
+
+    /** Mini golf modu: oda dondurulur, eşyalar engel olur, top deliğe sokulur. */
+    private fun setupHole(controls: View, holeControls: View) {
+        hole.sfx = sfx
+        hole.haptics = { vibrate(it) }
+        hole.frameProvider = { previewView.bitmap }
+        hole.scanRoom = { frame, done ->
+            // Tarayıcı ve ayırıcı aynı iş parçacığında yüklenir: bu iş, yükleme bittikten sonra çalışır
+            segExecutor.execute {
+                val dets = try { scanner?.scan(frame) ?: emptyList() } catch (e: Throwable) { emptyList() }
+                hole.post { done(dets) }
+            }
+        }
+        hole.segmentIn = { frame, x, y, done ->
+            segExecutor.execute {
+                val cut = try { segmenter?.cut(frame, x, y) } catch (e: Throwable) { null }
+                hole.post { done(cut) }
+            }
+        }
+        val btnAdd = findViewById<TextView>(R.id.btnAdd)
+        btnAdd.setOnClickListener { hole.addMode = !hole.addMode }
+        hole.onAddModeChanged = { btnAdd.isSelected = it }
+        findViewById<View>(R.id.btnRoom).setOnClickListener {
+            hole.addMode = false
+            hole.newRoom()
+        }
+        findViewById<View>(R.id.btnNewHole).setOnClickListener {
+            hole.addMode = false
+            hole.newHole(advance = false)
+        }
+        fun showGolf(on: Boolean) {
+            hole.visibility = if (on) View.VISIBLE else View.GONE
+            game.visibility = if (on) View.GONE else View.VISIBLE
+            holeControls.visibility = if (on) View.VISIBLE else View.GONE
+            controls.visibility = if (on) View.GONE else View.VISIBLE
+            if (on) hole.onShown()
+        }
+        findViewById<View>(R.id.btnGolf).setOnClickListener { showGolf(true) }
+        findViewById<View>(R.id.btnBreak).setOnClickListener { showGolf(false) }
     }
 
     private fun showPermissionPanel(show: Boolean) {

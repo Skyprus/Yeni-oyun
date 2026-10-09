@@ -8,6 +8,11 @@
     <string name="w_wrench">🔧 Anahtar</string>
     <string name="w_molotov">🔥 Molotof</string>
     <string name="w_boulder">☄️ Kaya</string>
+    <string name="golf">⛳ Golf</string>
+    <string name="break_mode">💥 Kır</string>
+    <string name="room">📸 Oda</string>
+    <string name="add_item">➕ Eşya</string>
+    <string name="new_hole">🔄 Delik</string>
     <string name="boxes">👁</string>
     <string name="select">🎯 Seç</string>
     <string name="scan">🔍 Tara</string>

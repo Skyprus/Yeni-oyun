@@ -43,6 +43,12 @@ Kamera izni yalnızca **HTTPS** (veya `localhost`) üzerinde çalışır.
   ☄️ kaya (gökten düşer, nesneyi ezer). Arabalar, kamyonlar, otobüsler, motosikletler de hedef.
 - **🎯 Seç:** dokunduğun nesneleri hedef olarak işaretler (uzun basmak da seçer ve odaklar).
 - **⬚ Çiz:** kırmak istediğin nesnenin etrafına parmakla kare/dikdörtgen çiz; birden fazla kutu çizilebilir.
+- **⛳ Golf (odada mini golf):** odaya bak, ekrana dokun; görüntü donar ve eşyalar engele dönüşür
+  (gerçek silüetleriyle). Parmağını geri çekip bırakarak topu vur, eşyalardan ve duvarlardan
+  sektirerek deliğe sok. Yumuşak eşyalar (kanepe, yatak, çanta) topu yutar, sert eşyalar (TV, şişe,
+  buzdolabı) güçlü sektirir. Delik çoğu zaman bir eşyanın arkasındadır (Par 3). Nişan alırken ilk
+  sekmeye kadar yol gösterilir. **➕ Eşya:** dokunduğun eşyayı engel yapar/kaldırır ya da kutu çizdirir;
+  **📸 Oda:** yeni oda; **🔄 Delik:** başka delik; **💥 Kır:** kırma moduna dön.
 - **🔍 Tara:** ekranı yüksek çözünürlükte parça parça tarar, kırılabilir eşyaları bulup seçer.
 
 **Kurulum:** Her push'ta GitHub Actions APK'yı derler ve *Releases* sayfasına koyar. Telefondan

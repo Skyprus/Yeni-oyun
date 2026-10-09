@@ -59,6 +59,8 @@ class Sfx(context: Context) {
             add("explosion", 2) { synthExplosion(it) }
             add("fall", 1) { synthFall() }
             add("impact", 2) { synthImpact(it) }
+            add("putt", 2) { synthPutt(it) }
+            add("cup", 1) { synthCup(it) }
         }.start()
     }
 
@@ -80,6 +82,9 @@ class Sfx(context: Context) {
     }
     fun stop(stream: Int) { if (stream != 0) pool.stop(stream) }
     fun bounce() = play("bounce", 0.7f)
+    /** Mini golf: topa vuruş ve topun deliğe düşmesi. */
+    fun putt() = play("putt", 0.8f)
+    fun cup() = play("cup")
     fun melee(w: Weapon) = play(if (w == Weapon.WRENCH) "clank" else "bat")
 
     private fun play(name: String, volume: Float = 1f) {
@@ -240,6 +245,28 @@ class Sfx(context: Context) {
                 out[i] += sin(phase) * exp(-t * 30f)
             }
             noise(out, r, 0f, 0.03f, 900f, 'l', 0.4f)
+            return out
+        }
+
+        /** Sopanın topa vuruşu: kısa, tok "tık". */
+        fun synthPutt(r: Random): FloatArray {
+            val out = buf(0.12f)
+            ping(out, 0f, 1650f, 0.05f, 0.5f)
+            ping(out, 0f, 720f, 0.08f, 0.35f)
+            noise(out, r, 0f, 0.02f, 2500f, 'h', 0.5f)
+            return out
+        }
+
+        /** Top deliğe düşer: kabın dibine çarpıp birkaç kez tıngırdar. */
+        fun synthCup(r: Random): FloatArray {
+            val out = buf(0.7f)
+            val hits = floatArrayOf(0f, 0.16f, 0.27f, 0.34f)
+            for ((i, t) in hits.withIndex()) {
+                val g = 0.8f / (1 + i)
+                ping(out, t, 980f + i * 40f, 0.25f, g)
+                ping(out, t, 2350f, 0.12f, g * 0.4f)
+                noise(out, r, t, 0.03f, 1800f, 'b', g * 0.5f)
+            }
             return out
         }
 

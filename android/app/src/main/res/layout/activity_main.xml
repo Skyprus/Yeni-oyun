@@ -14,6 +14,12 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <com.skyprus.kirgec.HoleView
+        android:id="@+id/hole"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
     <HorizontalScrollView
         android:id="@+id/controls"
         android:layout_width="wrap_content"
@@ -29,6 +35,7 @@
             android:paddingStart="8dp"
             android:paddingEnd="8dp">
 
+            <TextView android:id="@+id/btnGolf" style="@style/Pill" android:text="@string/golf" />
             <TextView android:id="@+id/btnBall" style="@style/Pill" android:text="@string/w_ball" />
             <TextView android:id="@+id/btnStone" style="@style/Pill" android:text="@string/w_stone" />
             <TextView android:id="@+id/btnSling" style="@style/Pill" android:text="@string/w_sling" />
@@ -40,6 +47,29 @@
             <TextView android:id="@+id/btnDraw" style="@style/Pill" android:text="@string/draw" />
             <TextView android:id="@+id/btnScan" style="@style/Pill" android:text="@string/scan" />
             <TextView android:id="@+id/btnBoxes" style="@style/Pill" android:text="@string/boxes" />
+        </LinearLayout>
+    </HorizontalScrollView>
+
+    <HorizontalScrollView
+        android:id="@+id/holeControls"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="12dp"
+        android:scrollbars="none"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp">
+
+            <TextView android:id="@+id/btnBreak" style="@style/Pill" android:text="@string/break_mode" />
+            <TextView android:id="@+id/btnRoom" style="@style/Pill" android:text="@string/room" />
+            <TextView android:id="@+id/btnAdd" style="@style/Pill" android:text="@string/add_item" />
+            <TextView android:id="@+id/btnNewHole" style="@style/Pill" android:text="@string/new_hole" />
         </LinearLayout>
     </HorizontalScrollView>
 
