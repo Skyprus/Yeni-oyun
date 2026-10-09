@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Oda Golf</string>
+    <string name="ramp">📐 Rampa</string>
+    <string name="add_item">➕ Eşya</string>
+    <string name="room">📸 Oda</string>
+    <string name="new_hole">🔄 Delik</string>
+    <string name="permission_text">Oyun, odandaki eşyaları engele çevirmek için kameraya ihtiyaç duyar. Görüntü telefonundan dışarı çıkmaz.</string>
+    <string name="permission_button">Kamera iznini ver</string>
+</resources>
