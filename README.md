@@ -41,6 +41,7 @@ Kamera izni yalnızca **HTTPS** (veya `localhost`) üzerinde çalışır.
 - **Aletler:** ⚽ top (seçili nesneler arasında seker), 🪨 taş, 🏹 sapan (geri çek-bırak, nişan yolu görünür),
   🏏 sopa ve 🔧 İngiliz anahtarı (yakın dövüş).
 - **🎯 Seç:** dokunduğun nesneleri hedef olarak işaretler (uzun basmak da seçer ve odaklar).
+- **⬚ Çiz:** kırmak istediğin nesnenin etrafına parmakla kare/dikdörtgen çiz; birden fazla kutu çizilebilir.
 - **🔍 Tara:** ekranı yüksek çözünürlükte parça parça tarar, kırılabilir eşyaları bulup seçer.
 
 **Kurulum:** Her push'ta GitHub Actions APK'yı derler ve *Releases* sayfasına koyar. Telefondan

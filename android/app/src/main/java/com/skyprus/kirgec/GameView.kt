@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
@@ -139,9 +140,21 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     var selectMode = false
         set(v) {
             field = v
+            if (v && drawMode) { drawMode = false }
             onSelectModeChanged?.invoke(v)
-            hint(if (v) "Seçim modu: kırmak istediğin nesnelere dokun (tekrar dokun: kaldır)" else selectionHint())
+            hint(if (v) "Seç: nesneye dokun (otomatik) ya da etrafına kutu çiz · tekrar dokun: kaldır" else selectionHint())
         }
+    /** Çizim modu: parmakla nesnenin etrafına kare/dikdörtgen çizilir, vuruş yapılmaz. */
+    var drawMode = false
+        set(v) {
+            field = v
+            if (v && selectMode) { selectMode = false }
+            onDrawModeChanged?.invoke(v)
+            hint(if (v) "Çiz: kırmak istediğin nesnenin etrafına parmağınla kutu çiz" else selectionHint())
+        }
+    var onDrawModeChanged: ((Boolean) -> Unit)? = null
+    private val marking get() = selectMode || drawMode
+    private var drawing: RectF? = null
     var status = "Kamera açılıyor…"
     private var statusT = 0L
     private var modelState = 0 // 0 yükleniyor, 1 hazır, -1 yok
@@ -319,6 +332,24 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         }
     }
 
+    /**
+     * Elle çizilen kutu: sabit, seçili bir hedef olur. Kutunun ortasındaki nesne ayrılabilirse
+     * gerçek silüetiyle kırılır, ayrılamazsa kutunun kendisi kırılır.
+     */
+    private fun addBoxTarget(box: RectF) {
+        val now = SystemClock.uptimeMillis()
+        val cls = clsFor(box)
+        val base = cls?.let { BREAKABLES[it] } ?: GENERIC_OBJECT
+        val name = cls?.let { labelOf(it).replaceFirstChar { c -> c.titlecase(tr) } } ?: "Hedef"
+        val t = Target(cls ?: "box", base.copy(label = name), RectF(box), base.hp, now, pinned = true)
+        t.selected = true
+        targets += t
+        hint("Kutu eklendi: $name · ${selectionHint()}")
+        segmentAt?.invoke(box.centerX(), box.centerY()) { cut ->
+            if (cut != null && box.contains(cut.box.centerX(), cut.box.centerY()) && iou(cut.box, box) > 0.2f) t.cut = cut
+        }
+    }
+
     // ---------- Girdi ----------
 
     private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -346,21 +377,22 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             // İki parmak: yakınlaştırma, vuruş değil
             pointerDown = false
             pulling = false
+            drawing = null
             removeCallbacks(longPress)
             return true
         }
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downX = e.x; downY = e.y; downT = SystemClock.uptimeMillis(); pointerDown = true
-                if (weapon == Weapon.SLING && !selectMode) {
-                    pulling = true
-                    pullX = 0f; pullY = 0f
-                } else {
-                    postDelayed(longPress, 450)
+                when {
+                    marking -> drawing = RectF(e.x, e.y, e.x, e.y)
+                    weapon == Weapon.SLING -> { pulling = true; pullX = 0f; pullY = 0f }
+                    else -> postDelayed(longPress, 450)
                 }
             }
             MotionEvent.ACTION_MOVE -> {
                 if (hypot(e.x - downX, e.y - downY) > 12 * d) removeCallbacks(longPress)
+                drawing?.set(min(downX, e.x), min(downY, e.y), max(downX, e.x), max(downY, e.y))
                 if (pulling) {
                     // Lastik en fazla MAX_PULL kadar gerilir
                     var px = e.x - downX
@@ -376,7 +408,7 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
                 performClick()
                 onUp(e.x, e.y)
             }
-            MotionEvent.ACTION_CANCEL -> { pointerDown = false; pulling = false; removeCallbacks(longPress) }
+            MotionEvent.ACTION_CANCEL -> { pointerDown = false; pulling = false; drawing = null; removeCallbacks(longPress) }
         }
         return true
     }
@@ -386,8 +418,14 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private fun onUp(x: Float, y: Float) {
         if (!pointerDown) return
         pointerDown = false
-        if (selectMode) {
-            if (hypot(x - downX, y - downY) < 20 * d) selectAt(x, y)
+        if (marking) {
+            val box = drawing
+            drawing = null
+            when {
+                box != null && box.width() > 25 * d && box.height() > 25 * d -> addBoxTarget(box)
+                selectMode && hypot(x - downX, y - downY) < 20 * d -> selectAt(x, y)
+                drawMode -> hint("Kutu çizmek için parmağını nesnenin bir köşesinden karşı köşesine sürükle")
+            }
             return
         }
         val now = SystemClock.uptimeMillis()
@@ -681,6 +719,7 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private val selectionPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
         colorFilter = PorterDuffColorFilter(0xFFFFD23F.toInt(), PorterDuff.Mode.SRC_ATOP)
     }
+    private val selectPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0xFFFFD23F.toInt() }
     private val badgeFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFD23F.toInt() }
     private val badgeText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.BLACK; typeface = Typeface.DEFAULT_BOLD; textAlign = Paint.Align.CENTER
@@ -760,7 +799,12 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             drawAmmo(c, Weapon.BALL, b.x, b.y, b.r, b.spin)
         }
 
-        if (!selectMode) drawHand(c, now)
+        drawing?.let {
+            selectPaint.strokeWidth = 2.5f * d
+            selectPaint.pathEffect = DashPathEffect(floatArrayOf(10 * d, 7 * d), 0f)
+            c.drawRect(it, selectPaint)
+        }
+        if (!marking) drawHand(c, now)
         focusRing?.let { f ->
             val age = now - focusT
             if (age > 900) focusRing = null else {

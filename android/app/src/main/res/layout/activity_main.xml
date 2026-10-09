@@ -35,6 +35,7 @@
             <TextView android:id="@+id/btnBat" style="@style/Pill" android:text="@string/w_bat" />
             <TextView android:id="@+id/btnWrench" style="@style/Pill" android:text="@string/w_wrench" />
             <TextView android:id="@+id/btnSelect" style="@style/Pill" android:text="@string/select" />
+            <TextView android:id="@+id/btnDraw" style="@style/Pill" android:text="@string/draw" />
             <TextView android:id="@+id/btnScan" style="@style/Pill" android:text="@string/scan" />
             <TextView android:id="@+id/btnBoxes" style="@style/Pill" android:text="@string/boxes" />
         </LinearLayout>
