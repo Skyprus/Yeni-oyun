@@ -20,6 +20,7 @@ import android.view.View
 import java.util.ArrayDeque
 import java.util.Locale
 import kotlin.math.PI
+import kotlin.math.atan2
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.exp
@@ -42,6 +43,14 @@ private class Ball(var x: Float, var y: Float) {
     var vx = 0f
     var vy = 0f
     val speed get() = hypot(vx, vy)
+}
+
+/** Oyuncunun yerleştirdiği eğik tahta: topu yönlendirir. (x, y) orta nokta, [len] boy. */
+private class Plank(var x: Float, var y: Float, var angle: Float, val len: Float) {
+    fun ax() = x - cos(angle) * len / 2f
+    fun ay() = y - sin(angle) * len / 2f
+    fun bx() = x + cos(angle) * len / 2f
+    fun by() = y + sin(angle) * len / 2f
 }
 
 private class Spark(var x: Float, var y: Float, var vx: Float, var vy: Float, val color: Int, val life: Float) {
@@ -84,14 +93,27 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     var haptics: ((Material) -> Unit)? = null
     var insetTop = 0
     var onAddModeChanged: ((Boolean) -> Unit)? = null
+    var onRampModeChanged: ((Boolean) -> Unit)? = null
+    private val prefs = context.getSharedPreferences("golf", Context.MODE_PRIVATE)
 
     /** Eşya ekleme modu: dokunulan eşya engel olur (ya da kaldırılır), sürükleyerek kutu çizilir. */
     var addMode = false
         set(v) {
             field = v
             drawing = null
+            if (v && rampMode) rampMode = false
             onAddModeChanged?.invoke(v)
             if (frozen != null) hint(if (v) "Eşyaya dokun: engel olsun / kalksın · ya da etrafına kutu çiz" else readyHint())
+        }
+
+    /** Rampa modu: boş yere dokun → tahta koy · tahtayı sürükle → taşı · ucunu sürükle → döndür · dokun → kaldır. */
+    var rampMode = false
+        set(v) {
+            field = v
+            grabbed = null
+            if (v && addMode) addMode = false
+            onRampModeChanged?.invoke(v)
+            if (frozen != null) hint(if (v) rampHint() else readyHint())
         }
 
     private var frozen: Bitmap? = null
@@ -120,6 +142,14 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private var par = 2
     private var total = 0          // toplam (vuruş - par)
     private var holeReady = false
+    private val planks = ArrayList<Plank>()
+    private var rampsAllowed = 2
+    private var starX = 0f
+    private var starY = 0f
+    private var starOn = false     // bu deliğin yıldızı hâlâ duruyor mu
+    private var stars = 0
+    private var courseDone = false
+    private var best = Int.MAX_VALUE
 
     private var status = ""
     private var statusT = 0L
@@ -135,6 +165,10 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private var aiming = false
     private var pointerDown = false
     private var drawing: RectF? = null
+    private var grabbed: Plank? = null
+    private var grabEnd = 0         // 0 gövde (taşı), ±1 uç (döndür)
+    private var grabX = 0f
+    private var grabY = 0f
 
     // ---------- Alan ve perspektif ----------
 
@@ -152,6 +186,9 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         status = text
         statusT = SystemClock.uptimeMillis()
     }
+
+    private fun rampHint() =
+        "Rampa (${rampsAllowed - planks.size} hakkın kaldı): boş yere dokun → koy · sürükle → taşı · ucunu çevir → döndür"
 
     private fun readyHint() =
         if (obstacles.isEmpty()) "Engel yok — ➕ Eşya ile odadaki eşyaları ekle, sonra parmağını geri çekip bırak"
@@ -178,6 +215,9 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         sinking = 0f
         total = 0
         holeNo = 0
+        stars = 0
+        courseDone = false
+        planks.clear()
         scanning = true
         hint("Oda taranıyor… eşyalar engele dönüşecek")
         val scan = scanRoom
@@ -361,8 +401,16 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
      * böylece topu sektirmek gerekir.
      */
     fun newHole(advance: Boolean = true) {
-        if (frozen == null || width == 0) return
-        if (!advance && holeReady && strokes > 0) total += strokes + 1 - par // pas geçmenin cezası
+        if (frozen == null || width == 0 || scanning) return
+        if (courseDone) { startCourse(); return }
+        if (advance) {
+            if (holeNo >= COURSE_HOLES) { finishCourse(); return }
+            holeNo++
+        } else if (holeReady && strokes > 0) {
+            total += 1 // aynı deliği yeniden çekmenin cezası
+            note(width / 2f, height / 2f, "Yeni delik: +1 ceza", 0xFFFF8A80.toInt())
+        }
+        if (holeNo == 0) holeNo = 1
         teeX = width / 2f
         teeY = bottom() - 46 * d
         if (blockedAt(teeX, teeY, ballR(teeY) * 1.3f)) freeSpot(teeX, teeY)?.let { teeX = it[0]; teeY = it[1] }
@@ -371,7 +419,11 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         sinking = 0f
         strokes = 0
         trail.clear()
-        holeNo++
+        planks.clear()
+        grabbed = null
+        // Zorluk delik numarasıyla artar: daha uzak, daha sık eşyanın arkasında, daha az rampa
+        val level = (holeNo - 1).toFloat() / (COURSE_HOLES - 1)
+        rampsAllowed = if (holeNo <= 3) 2 else 1
 
         val reach = reachable(teeX, teeY)
         val span = bottom() - top()
@@ -380,21 +432,89 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         repeat(500) {
             val x = left() + 30 * d + Random.nextFloat() * (right() - left() - 60 * d)
             val y = top() + 20 * d + Random.nextFloat() * (span * 0.72f)
-            if (hypot(x - teeX, y - teeY) < span * 0.38f) return@repeat
+            if (hypot(x - teeX, y - teeY) < span * (0.32f + 0.2f * level)) return@repeat
             if (blockedAt(x, y, holeR(y) * 1.5f)) return@repeat
             if (reach != null && !reach[cellIndex(x, y)]) return@repeat
             if (lineBlocked(teeX, teeY, x, y)) hidden += floatArrayOf(x, y) else open += floatArrayOf(x, y)
         }
         val pick = when {
-            hidden.isNotEmpty() && (open.isEmpty() || Random.nextFloat() < 0.75f) -> hidden.random().also { par = 3 }
+            hidden.isNotEmpty() && (open.isEmpty() || Random.nextFloat() < 0.55f + 0.4f * level) -> hidden.random().also { par = 3 }
             open.isNotEmpty() -> open.maxByOrNull { hypot(it[0] - teeX, it[1] - teeY) * (0.6f + Random.nextFloat()) }!!.also { par = 2 }
             else -> floatArrayOf(width / 2f, top() + 50 * d).also { par = 3 }
         }
         holeX = pick[0]
         holeY = pick[1]
         holeReady = true
-        hint(if (par == 3) "Delik $holeNo · Par 3 — delik eşyanın arkasında, sektirmen gerek!"
-        else "Delik $holeNo · Par 2 — parmağını geri çek, bırak")
+        placeStar(reach)
+        hint(if (par == 3) "Delik $holeNo/$COURSE_HOLES · Par 3 — delik eşyanın arkasında: sektir ya da 📐 rampa koy"
+        else "Delik $holeNo/$COURSE_HOLES · Par 2 — parmağını geri çek, bırak · ⭐ yıldızı da topla")
+    }
+
+    /** Yıldız: tee ile delik arasındaki düz yolun dışında, ulaşılabilir bir yere; toplamak için yoldan sapmak gerekir. */
+    private fun placeStar(reach: BooleanArray?) {
+        starOn = false
+        var bestPos: FloatArray? = null
+        var bestScore = 0f
+        repeat(300) {
+            val x = left() + 30 * d + Random.nextFloat() * (right() - left() - 60 * d)
+            val y = top() + 25 * d + Random.nextFloat() * (bottom() - top() - 90 * d)
+            if (blockedAt(x, y, ballR(y) * 1.8f)) return@repeat
+            if (reach != null && !reach[cellIndex(x, y)]) return@repeat
+            val dh = hypot(x - holeX, y - holeY)
+            val dt = hypot(x - teeX, y - teeY)
+            if (dh < 50 * d || dt < 60 * d) return@repeat
+            // Düz yoldan uzaklık: ne çok yakın (bedava) ne çok uzak
+            val off = distToSegment(x, y, teeX, teeY, holeX, holeY)
+            val score = min(off, 160 * d) * (0.7f + 0.6f * Random.nextFloat())
+            if (off > 45 * d && score > bestScore) { bestScore = score; bestPos = floatArrayOf(x, y) }
+        }
+        bestPos?.let { starX = it[0]; starY = it[1]; starOn = true }
+    }
+
+    private fun distToSegment(px: Float, py: Float, ax: Float, ay: Float, bx: Float, by: Float): Float {
+        val c = closestOnSegment(px, py, ax, ay, bx, by)
+        return hypot(px - c[0], py - c[1])
+    }
+
+    private fun closestOnSegment(px: Float, py: Float, ax: Float, ay: Float, bx: Float, by: Float): FloatArray {
+        val vx = bx - ax
+        val vy = by - ay
+        val l2 = vx * vx + vy * vy
+        val t = if (l2 < 1e-3f) 0f else (((px - ax) * vx + (py - ay) * vy) / l2).coerceIn(0f, 1f)
+        return floatArrayOf(ax + vx * t, ay + vy * t)
+    }
+
+    /** Aynı odada yeni 9 delikli parkur. */
+    private fun startCourse() {
+        courseDone = false
+        holeNo = 0
+        total = 0
+        stars = 0
+        newHole(advance = true)
+    }
+
+    private fun finishCourse() {
+        courseDone = true
+        holeReady = false
+        planks.clear()
+        val key = "best"
+        best = prefs.getInt(key, Int.MAX_VALUE)
+        val record = total < best
+        if (record) { best = total; prefs.edit().putInt(key, total).apply() }
+        sfx?.cup()
+        repeat(80) {
+            val a = Random.nextFloat() * 2f * PI.toFloat()
+            val v = (120 + Random.nextFloat() * 380) * d
+            val colors = intArrayOf(0xFFFFD23F.toInt(), 0xFFFF5D5D.toInt(), 0xFF6BE3FF.toInt(), 0xFF8CFF8C.toInt(), Color.WHITE)
+            sparks += Spark(width / 2f, height * 0.4f, cos(a) * v, sin(a) * v - 260 * d, colors[Random.nextInt(colors.size)], 1.2f + Random.nextFloat() * 0.8f)
+        }
+        hint(if (record) "Yeni rekor! 🏆 Ekrana dokun: yeni parkur" else "Parkur bitti — ekrana dokun: yeni parkur")
+    }
+
+    private fun scoreText(v: Int) = when {
+        v > 0 -> "+$v"
+        v == 0 -> "E"
+        else -> v.toString()
     }
 
     private fun cellIndex(x: Float, y: Float): Int {
@@ -477,19 +597,22 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             MotionEvent.ACTION_DOWN -> {
                 downX = e.x; downY = e.y; curX = e.x; curY = e.y
                 pointerDown = true
-                aiming = frozen != null && !addMode && !moving && sinking == 0f && !scanning && strokes < MAX_STROKES
+                aiming = frozen != null && !addMode && !rampMode && !courseDone && !moving && sinking == 0f &&
+                    !scanning && strokes < MAX_STROKES
                 if (addMode) drawing = RectF(e.x, e.y, e.x, e.y)
+                if (rampMode && !moving) grab(e.x, e.y)
             }
             MotionEvent.ACTION_MOVE -> {
                 curX = e.x; curY = e.y
                 drawing?.set(min(downX, e.x), min(downY, e.y), max(downX, e.x), max(downY, e.y))
+                grabbed?.let { dragPlank(it, e.x, e.y) }
             }
             MotionEvent.ACTION_UP -> {
                 performClick()
                 curX = e.x; curY = e.y
                 onUp(e.x, e.y)
             }
-            MotionEvent.ACTION_CANCEL -> { pointerDown = false; aiming = false; drawing = null }
+            MotionEvent.ACTION_CANCEL -> { pointerDown = false; aiming = false; drawing = null; grabbed = null }
         }
         return true
     }
@@ -501,6 +624,8 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         pointerDown = false
         val dist = hypot(x - downX, y - downY)
         if (frozen == null) { if (!scanning) newRoom(); return }
+        if (courseDone) { if (dist < 20 * d) startCourse(); return }
+        if (rampMode) { rampUp(x, y, dist); return }
         if (addMode) {
             val box = drawing
             drawing = null
@@ -522,6 +647,53 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         touched.clear()
         trail.clear()
         sfx?.putt()
+    }
+
+    // ---------- Rampalar ----------
+
+    /** Dokunulan tahtayı yakalar: uca yakınsa döndürmek, gövdeye yakınsa taşımak için. */
+    private fun grab(x: Float, y: Float) {
+        grabbed = null
+        val reach = 26 * d
+        for (p in planks.asReversed()) {
+            when {
+                hypot(x - p.ax(), y - p.ay()) < reach -> { grabbed = p; grabEnd = -1 }
+                hypot(x - p.bx(), y - p.by()) < reach -> { grabbed = p; grabEnd = 1 }
+                distToSegment(x, y, p.ax(), p.ay(), p.bx(), p.by()) < reach -> { grabbed = p; grabEnd = 0 }
+            }
+            if (grabbed != null) { grabX = p.x; grabY = p.y; return }
+        }
+    }
+
+    private fun dragPlank(p: Plank, x: Float, y: Float) {
+        if (grabEnd == 0) {
+            p.x = (grabX + x - downX).coerceIn(left(), right())
+            p.y = (grabY + y - downY).coerceIn(top(), bottom())
+        } else {
+            val a = atan2(y - p.y, x - p.x)
+            p.angle = if (grabEnd > 0) a else a + PI.toFloat()
+        }
+    }
+
+    private fun rampUp(x: Float, y: Float, dist: Float) {
+        val g = grabbed
+        grabbed = null
+        if (moving) { hint("Top dururken rampa koyabilirsin"); return }
+        if (g != null) {
+            if (dist < 12 * d) {
+                planks.remove(g)
+                hint("Rampa kaldırıldı · " + rampHint())
+            }
+            return
+        }
+        if (dist > 20 * d) return
+        if (planks.size >= rampsAllowed) { hint("Bu delikte en fazla $rampsAllowed rampa — birini kaldırmak için üstüne dokun"); return }
+        if (y < top() || y > bottom()) return
+        // Topa doğru dik değil, çapraz konur: hemen bir yöne saptırır
+        val toBall = atan2(ball.y - y, ball.x - x)
+        planks += Plank(x, y, toBall + PI.toFloat() / 4f, RAMP_LEN * d * persp(y))
+        sfx?.bounce()
+        hint(rampHint())
     }
 
     /** Çekme vektörünün tersi yönünde, çekme miktarıyla orantılı hız; çok kısa çekişte null. */
@@ -607,6 +779,36 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
                     }
                 }
             }
+            // Rampalar: kalın çizgi gibi davranır, topu yüzeyi boyunca saptırır
+            for (pl in planks) {
+                val c = closestOnSegment(b.x, b.y, pl.ax(), pl.ay(), pl.bx(), pl.by())
+                var nx = b.x - c[0]
+                var ny = b.y - c[1]
+                val dist = hypot(nx, ny)
+                val reachR = r + RAMP_W * d / 2f
+                if (dist >= reachR) continue
+                if (dist < 1e-3f) { nx = -sin(pl.angle); ny = cos(pl.angle) } else { nx /= dist; ny /= dist }
+                b.x = c[0] + nx * reachR
+                b.y = c[1] + ny * reachR
+                val vn = b.vx * nx + b.vy * ny
+                if (vn < 0) {
+                    b.vx -= (1f + RAMP_BOUNCE) * vn * nx
+                    b.vy -= (1f + RAMP_BOUNCE) * vn * ny
+                    bounces++
+                    if (!preview && -vn > 90 * d) { sfx?.bounce(); puff(c[0], c[1], 0xFFE0A86E.toInt(), 6) }
+                }
+            }
+            if (!preview && starOn && hypot(b.x - starX, b.y - starY) < r + STAR_R * d * persp(starY)) {
+                starOn = false
+                stars++
+                note(starX, starY - 26 * d, "⭐ +1", 0xFFFFD23F.toInt())
+                sfx?.putt()
+                repeat(16) {
+                    val a = Random.nextFloat() * 2f * PI.toFloat()
+                    val v = (60 + Random.nextFloat() * 160) * d
+                    sparks += Spark(starX, starY, cos(a) * v, sin(a) * v, 0xFFFFE27A.toInt(), 0.6f)
+                }
+            }
             // Sürtünme
             val s = b.speed
             if (s > 0f) {
@@ -669,7 +871,7 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         }
         val bank = if (touched.isNotEmpty()) " · ${touched.size} eşyadan sekti" else ""
         note(holeX, holeY - 40 * d, word, 0xFFFFD23F.toInt())
-        hint("Delik $holeNo: $strokes vuruş$bank")
+        hint("Delik $holeNo: $strokes vuruş$bank" + if (holeNo >= COURSE_HOLES) " · parkur bitti!" else "")
         repeat(40) {
             val a = Random.nextFloat() * 2f * PI.toFloat()
             val v = (80 + Random.nextFloat() * 260) * d
@@ -796,6 +998,8 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
 
         for (o in obstacles) drawObstacle(c, o, now)
         if (holeReady) drawHole(c, now)
+        if (holeReady && starOn) drawStar(c, now)
+        for (pl in planks) drawPlank(c, pl)
 
         // İz
         var i = 0
@@ -807,7 +1011,7 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         }
         if (aiming && pointerDown) drawAim(c)
         if (holeReady) drawBall(c)
-        if (holeReady && !moving && sinking == 0f && !aiming) drawFlag(c, now)
+        if (holeReady && !moving && sinking == 0f && !(aiming && pointerDown)) drawFlag(c, now)
 
         for (s in sparks) {
             fillPaint.color = s.color
@@ -833,7 +1037,70 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             c.drawText(n.text, n.x, n.y, noteStroke)
             c.drawText(n.text, n.x, n.y, notePaint)
         }
+        if (courseDone) drawSummary(c)
         drawHud(c)
+    }
+
+    private fun drawPlank(c: Canvas, p: Plank) {
+        val w = RAMP_W * d
+        linePaint.pathEffect = null
+        linePaint.strokeCap = Paint.Cap.ROUND
+        linePaint.color = 0xFF6B4423.toInt()
+        linePaint.alpha = 255
+        linePaint.strokeWidth = w + 2 * d
+        c.drawLine(p.ax(), p.ay(), p.bx(), p.by(), linePaint)
+        linePaint.color = 0xFFD9A066.toInt()
+        linePaint.strokeWidth = w - 2 * d
+        c.drawLine(p.ax(), p.ay(), p.bx(), p.by(), linePaint)
+        if (rampMode) {
+            fillPaint.color = Color.WHITE
+            fillPaint.alpha = if (grabbed === p) 255 else 170
+            c.drawCircle(p.ax(), p.ay(), 6 * d, fillPaint)
+            c.drawCircle(p.bx(), p.by(), 6 * d, fillPaint)
+        }
+    }
+
+    private fun drawStar(c: Canvas, now: Long) {
+        val r = STAR_R * d * persp(starY) * (1f + 0.08f * sin(now / 200f))
+        val rot = now / 900f
+        tmpPath.reset()
+        for (i in 0 until 10) {
+            val a = rot + i * PI.toFloat() / 5f - PI.toFloat() / 2f
+            val rr = if (i % 2 == 0) r else r * 0.45f
+            val x = starX + cos(a) * rr
+            val y = starY + sin(a) * rr
+            if (i == 0) tmpPath.moveTo(x, y) else tmpPath.lineTo(x, y)
+        }
+        tmpPath.close()
+        fillPaint.color = 0xFFFFD23F.toInt()
+        fillPaint.alpha = 255
+        c.drawPath(tmpPath, fillPaint)
+        linePaint.color = 0xFF8A5A00.toInt()
+        linePaint.alpha = 255
+        linePaint.strokeWidth = 1.5f * d
+        c.drawPath(tmpPath, linePaint)
+    }
+
+    /** Parkur sonu: toplam skor, yıldızlar, en iyi skor. */
+    private fun drawSummary(c: Canvas) {
+        val cx = width / 2f
+        val cy = height * 0.45f
+        tmpRect.set(28 * d, cy - 120 * d, width - 28 * d, cy + 110 * d)
+        fillPaint.color = Color.argb(200, 10, 12, 20)
+        c.drawRoundRect(tmpRect, 18 * d, 18 * d, fillPaint)
+        val lines = listOf(
+            "⛳ Parkur bitti!" to 28f,
+            "$COURSE_HOLES delik · Toplam ${scoreText(total)}" to 20f,
+            "⭐ $stars / $COURSE_HOLES yıldız" to 20f,
+            (if (best != Int.MAX_VALUE) "En iyi: ${scoreText(best)}" else "") to 16f,
+            "Ekrana dokun: yeni parkur" to 15f,
+        )
+        var y = cy - 72 * d
+        for ((text, size) in lines) {
+            promptPaint.textSize = size * d
+            c.drawText(text, cx, y, promptPaint)
+            y += (size + 22) * d
+        }
     }
 
     /** Oda kurulmadan önce: canlı kameranın üstünde vizör ve yönerge. */
@@ -1002,13 +1269,11 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         var x = 12 * d
         hudSmall.textSize = 11 * d
         hudBig.textSize = 20 * d
-        val tot = when {
-            total > 0 -> "+$total"
-            total == 0 -> "E"
-            else -> total.toString()
-        }
-        for ((label, value) in listOf("Delik" to holeNo.toString(), "Vuruş" to strokes.toString(), "Par" to par.toString(), "Toplam" to tot)) {
-            val w = 62 * d
+        for ((label, value) in listOf(
+            "Delik" to "$holeNo/$COURSE_HOLES", "Vuruş" to strokes.toString(), "Par" to par.toString(),
+            "Toplam" to scoreText(total), "⭐" to stars.toString(),
+        )) {
+            val w = if (label == "⭐") 44 * d else 60 * d
             tmpRect.set(x, y0, x + w, y0 + 46 * d)
             c.drawRoundRect(tmpRect, 10 * d, 10 * d, hudBg)
             c.drawText(label, x + w / 2f, y0 + 15 * d, hudSmall)
@@ -1039,5 +1304,10 @@ class HoleView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         const val CAPTURE = 520f        // dp/s: bundan yavaşsa delikten düşer
         const val WALL_BOUNCE = 0.72f
         const val MAX_STROKES = 10
+        const val COURSE_HOLES = 9
+        const val RAMP_LEN = 90f        // dp, ekranın altında
+        const val RAMP_W = 9f           // dp
+        const val RAMP_BOUNCE = 0.8f
+        const val STAR_R = 13f          // dp
     }
 }

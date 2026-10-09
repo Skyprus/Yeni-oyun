@@ -2,7 +2,7 @@ name: Android APK
 
 on:
   push:
-    branches: [claude/breakable-objects-ar-game-oxt8w9]
+    branches: [claude/breakable-objects-ar-game-oxt8w9, ccr-5c43ae55-m6uhbl]
     paths: ['android/**', '.github/workflows/android.yml']
   workflow_dispatch:
 

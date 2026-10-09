@@ -68,6 +68,7 @@
 
             <TextView android:id="@+id/btnBreak" style="@style/Pill" android:text="@string/break_mode" />
             <TextView android:id="@+id/btnRoom" style="@style/Pill" android:text="@string/room" />
+            <TextView android:id="@+id/btnRamp" style="@style/Pill" android:text="@string/ramp" />
             <TextView android:id="@+id/btnAdd" style="@style/Pill" android:text="@string/add_item" />
             <TextView android:id="@+id/btnNewHole" style="@style/Pill" android:text="@string/new_hole" />
         </LinearLayout>

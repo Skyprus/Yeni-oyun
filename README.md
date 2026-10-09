@@ -48,7 +48,12 @@ Kamera izni yalnızca **HTTPS** (veya `localhost`) üzerinde çalışır.
   sektirerek deliğe sok. Yumuşak eşyalar (kanepe, yatak, çanta) topu yutar, sert eşyalar (TV, şişe,
   buzdolabı) güçlü sektirir. Delik çoğu zaman bir eşyanın arkasındadır (Par 3). Nişan alırken ilk
   sekmeye kadar yol gösterilir. **➕ Eşya:** dokunduğun eşyayı engel yapar/kaldırır ya da kutu çizdirir;
-  **📸 Oda:** yeni oda; **🔄 Delik:** başka delik; **💥 Kır:** kırma moduna dön.
+  **📸 Oda:** yeni oda; **🔄 Delik:** başka delik (vuruş yaptıysan +1 ceza); **💥 Kır:** kırma moduna dön.
+  - **📐 Rampa:** topu yönlendirmek için eğik tahta koy (ilk 3 delikte 2, sonra 1 hak). Boş yere dokun → koy,
+    sürükle → taşı, ucunu çevir → döndür, üstüne dokun → kaldır. Nişan çizgisi rampadan sekişi de gösterir.
+  - **⭐ Yıldız:** her delikte yoldan biraz uzakta bir yıldız var; topla, parkur sonunda sayılır.
+  - **Parkur:** 9 delik, gittikçe zorlaşır (daha uzak, daha sık eşyanın arkasında, daha az rampa).
+    Sonunda toplam skor, yıldızlar ve en iyi skor (telefonda saklanır) gösterilir.
 - **🔍 Tara:** ekranı yüksek çözünürlükte parça parça tarar, kırılabilir eşyaları bulup seçer.
 
 **Kurulum:** Her push'ta GitHub Actions APK'yı derler ve *Releases* sayfasına koyar. Telefondan

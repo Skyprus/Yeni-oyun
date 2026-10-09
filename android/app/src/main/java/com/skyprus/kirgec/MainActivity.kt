@@ -188,12 +188,17 @@ class MainActivity : ComponentActivity() {
         val btnAdd = findViewById<TextView>(R.id.btnAdd)
         btnAdd.setOnClickListener { hole.addMode = !hole.addMode }
         hole.onAddModeChanged = { btnAdd.isSelected = it }
+        val btnRamp = findViewById<TextView>(R.id.btnRamp)
+        btnRamp.setOnClickListener { hole.rampMode = !hole.rampMode }
+        hole.onRampModeChanged = { btnRamp.isSelected = it }
         findViewById<View>(R.id.btnRoom).setOnClickListener {
             hole.addMode = false
+            hole.rampMode = false
             hole.newRoom()
         }
         findViewById<View>(R.id.btnNewHole).setOnClickListener {
             hole.addMode = false
+            hole.rampMode = false
             hole.newHole(advance = false)
         }
         fun showGolf(on: Boolean) {
