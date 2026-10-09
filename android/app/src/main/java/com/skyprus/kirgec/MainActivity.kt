@@ -141,6 +141,7 @@ class MainActivity : ComponentActivity() {
                 val ms = det?.lastMs ?: 0L
                 game.post { game.ingest(dets, iw, ih, ms) }
             }
+            det?.onError = { msg -> game.post { game.info = "⚠ $msg" } }
             detector = det
             runOnUiThread { game.setModelReady(det != null) }
         }

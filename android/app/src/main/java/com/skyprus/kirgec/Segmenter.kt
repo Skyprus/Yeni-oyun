@@ -107,6 +107,9 @@ class Segmenter private constructor(private val seg: InteractiveSegmenter) {
         }
         val frac = count.toFloat() / (mw * mh)
         if (frac < MIN_FRAC || frac > MAX_FRAC) return null
+        // İki ya da daha fazla ekran kenarına dayanan geniş alan: duvar, zemin, masa yüzeyi — kırılmaz
+        val edges = listOf(minX <= 1, minY <= 1, maxX >= mw - 2, maxY >= mh - 2).count { it }
+        if (edges >= 2 && frac > 0.06f) return null
         val bw = maxX - minX + 1
         val bh = maxY - minY + 1
 
@@ -168,7 +171,7 @@ class Segmenter private constructor(private val seg: InteractiveSegmenter) {
         private const val MODEL = "magic_touch.tflite"
         private const val WORK = 512f       // segmentasyon çözünürlüğü (uzun kenar)
         private const val MIN_FRAC = 0.0015f // çok küçük: büyük ihtimalle hatalı seçim
-        private const val MAX_FRAC = 0.35f   // çok büyük: duvar/zemin, kırılmaz
+        private const val MAX_FRAC = 0.25f   // çok büyük: duvar/zemin, kırılmaz
 
         fun create(context: Context): Segmenter? = try {
             val options = InteractiveSegmenter.InteractiveSegmenterOptions.builder()
