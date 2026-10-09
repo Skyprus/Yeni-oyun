@@ -39,7 +39,8 @@ Kamera izni yalnızca **HTTPS** (veya `localhost`) üzerinde çalışır.
 - **Her şey kırılabilir:** vurulan noktadaki nesne MediaPipe Interactive Segmenter ile tam silüetiyle ayrılır,
   yeri çevresinden doldurularak silinir.
 - **Aletler:** ⚽ top (seçili nesneler arasında seker), 🪨 taş, 🏹 sapan (geri çek-bırak, nişan yolu görünür),
-  🏏 sopa ve 🔧 İngiliz anahtarı (yakın dövüş).
+  🏏 sopa ve 🔧 İngiliz anahtarı (yakın dövüş), 🔥 molotof (nesne yanar, kararır, patlar) ve
+  ☄️ kaya (gökten düşer, nesneyi ezer). Arabalar, kamyonlar, otobüsler, motosikletler de hedef.
 - **🎯 Seç:** dokunduğun nesneleri hedef olarak işaretler (uzun basmak da seçer ve odaklar).
 - **⬚ Çiz:** kırmak istediğin nesnenin etrafına parmakla kare/dikdörtgen çiz; birden fazla kutu çizilebilir.
 - **🔍 Tara:** ekranı yüksek çözünürlükte parça parça tarar, kırılabilir eşyaları bulup seçer.

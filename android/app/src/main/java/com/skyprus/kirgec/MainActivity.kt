@@ -100,6 +100,8 @@ class MainActivity : ComponentActivity() {
             Weapon.SLING to findViewById<TextView>(R.id.btnSling),
             Weapon.BAT to findViewById<TextView>(R.id.btnBat),
             Weapon.WRENCH to findViewById<TextView>(R.id.btnWrench),
+            Weapon.MOLOTOV to findViewById<TextView>(R.id.btnMolotov),
+            Weapon.BOULDER to findViewById<TextView>(R.id.btnBoulder),
         )
         weaponButtons.getValue(Weapon.BALL).isSelected = true
         for ((w, btn) in weaponButtons) {
@@ -110,6 +112,8 @@ class MainActivity : ComponentActivity() {
                 game.drawMode = false
                 game.hint(when {
                     w == Weapon.SLING -> "Sapan: parmağını aşağı çek, nişan al, bırak"
+                    w == Weapon.MOLOTOV -> "Molotof: arabaya (ya da herhangi bir şeye) fırlat — yanar ve patlar"
+                    w == Weapon.BOULDER -> "Kaya: hedefe dokun — gökten dev bir kaya düşer"
                     w == Weapon.BALL -> "Top: fırlat — seçili nesneler varsa aralarında seker"
                     w.thrown -> "${w.label}: yukarı kaydır ya da dokun → fırlat"
                     else -> "${w.label}: vurmak istediğin yere dokun"

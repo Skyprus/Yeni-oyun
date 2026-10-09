@@ -166,6 +166,12 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private val drops = ArrayList<DropBall>()
     private var swing: Swing? = null
     private val shards = ArrayList<Shard>()
+    private val fires = ArrayList<Fire>()
+    private val fireParticles = ArrayList<FireParticle>()
+    private val falling = ArrayList<Pair<Boulder, PendingHit>>()
+    private val rocks = ArrayList<Boulder>()
+    private val flameSprite = softSprite(0xFFFFF4C2.toInt(), 0xFFFF8A1E.toInt())
+    private val smokeSprite = softSprite(0xC0302C28.toInt(), 0x70403A34)
     private val particles = ArrayList<Particle>()
     private val popups = ArrayList<Popup>()
     private var score = 0
@@ -189,6 +195,7 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private var pullX = 0f
     private var pullY = 0f
 
+    private val iconRock = Boulder(0f, 0f, 1f, 1f).shape
     private val stoneShape = FloatArray(18).also {
         for (i in 0 until 9) {
             val a = i / 9f * 2f * PI.toFloat()
@@ -452,6 +459,10 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         ty = ty.coerceIn(0f, height.toFloat())
         lastThrow = now
         shots++
+        if (weapon.drop) {
+            dropBoulder(tx, ty)
+            return
+        }
         val hit = newHit(tx, ty, weapon)
         if (weapon.thrown) {
             val sx = width / 2f
@@ -521,6 +532,7 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         val now = SystemClock.uptimeMillis()
         val w = h.weapon
         val pad = w.hitPadDp * d
+        if (w == Weapon.MOLOTOV) { igniteAt(h); return }
         if (!w.thrown) sfx?.melee(w)
 
         if (inRubble(h.x, h.y, now)) {
@@ -599,9 +611,9 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         return c
     }
 
-    private fun breakObject(cut: Cutout?, info: Breakable, name: String, target: Target?, h: PendingHit) {
+    private fun breakObject(cut: Cutout?, info: Breakable, name: String, target: Target?, h: PendingHit, verb: String = "kırıldı!") {
         val now = SystemClock.uptimeMillis()
-        val electronic = info.material == Material.ELECTRONIC
+        val electronic = info.material == Material.ELECTRONIC || info.material == Material.VEHICLE
         val box = RectF(target?.box ?: cut?.box ?: RectF(h.x - 40 * d, h.y - 40 * d, h.x + 40 * d, h.y + 40 * d))
         if (cut != null) shards += makeShards(cut, h.x, h.y, h.weapon.power, d)
         val wreck = Wreck(
@@ -631,7 +643,183 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         val points = info.points * (1 + h.chain)
         score += points
         broken++
-        popup(h.x, h.y - 30 * d, "$name kırıldı! +$points", 0xFFFFD23F.toInt())
+        popup(h.x, h.y - 30 * d, "$name $verb +$points", 0xFFFFD23F.toInt())
+    }
+
+    // ---------- Molotof ve kaya ----------
+
+    /** Noktadaki (dolgu payıyla) en küçük, kırılmamış hedef. */
+    private fun findTarget(x: Float, y: Float, pad: Float, now: Long): Target? = targets
+        .filter { !it.isBroken(now) && x > it.box.left - pad && x < it.box.right + pad && y > it.box.top - pad && y < it.box.bottom + pad }
+        .minByOrNull { it.box.width() * it.box.height() }
+
+    private fun cutFor(h: PendingHit, target: Target?): Cutout? {
+        val c = h.cut?.takeIf { c -> target == null || iou(c.box, target.box) > 0.1f || target.box.contains(c.box.centerX(), c.box.centerY()) }
+        if (c != null || target == null) return c
+        return target.cut?.takeIf { iou(it.box, target.box) > 0.3f } ?: fallbackCut(target.box)
+    }
+
+    private fun nameFor(cut: Cutout?): Pair<Breakable, String> {
+        val cls = cut?.let { clsFor(it.box) }
+        val info = cls?.let { BREAKABLES[it] } ?: GENERIC_OBJECT
+        val name = cls?.let { labelOf(it).replaceFirstChar { c -> c.titlecase(tr) } } ?: "Nesne"
+        return info to name
+    }
+
+    /** Şişe kırılır, isabet edilen nesne tutuşur; bir süre yanıp patlar. Boşlukta yerde yanar. */
+    private fun igniteAt(h: PendingHit) {
+        val now = SystemClock.uptimeMillis()
+        val target = h.aimed ?: findTarget(h.x, h.y, h.weapon.hitPadDp * d, now)
+        val cut = cutFor(h, target)
+        val box = target?.box?.let { RectF(it) } ?: cut?.box?.let { RectF(it) }
+        val obj = box != null
+        val fire = Fire(h.x, h.y, target, cut, box, now, if (obj) 2200L else 0L, now + if (obj) 7200L else 3500L)
+        fire.loopStream = sfx?.fireLoop() ?: 0
+        fires += fire
+        sfx?.shatter(Material.GLASS)
+        sfx?.ignite()
+        burst(h.x, h.y, 18, intArrayOf(0xFFBFE8C0.toInt(), 0xFFFFB347.toInt(), 0xFFFFE08A.toInt()), 260f)
+        repeat(14) { spawnFlame(h.x + (Random.nextFloat() - 0.5f) * 40 * d, h.y, 1.6f) }
+        shake = max(shake, 8f)
+        popup(h.x, h.y - 30 * d, if (obj) "Tutuştu! 🔥" else "Yerde yanıyor 🔥", 0xFFFFA040.toInt())
+    }
+
+    private fun spawnFlame(x: Float, y: Float, scale: Float) {
+        fireParticles += FireParticle(
+            x, y, (Random.nextFloat() - 0.5f) * 30 * d, -(60 + Random.nextFloat() * 90) * d,
+            0.45f + Random.nextFloat() * 0.45f, (12 + Random.nextFloat() * 14) * d * scale, 0,
+        )
+    }
+
+    private fun spawnSmoke(x: Float, y: Float, scale: Float) {
+        fireParticles += FireParticle(
+            x, y, (Random.nextFloat() - 0.5f) * 24 * d, -(30 + Random.nextFloat() * 40) * d,
+            1.6f + Random.nextFloat() * 0.9f, (16 + Random.nextFloat() * 18) * d * scale, 1,
+        )
+    }
+
+    private fun spawnEmber(x: Float, y: Float, speed: Float) {
+        val a = Random.nextFloat() * 2f * PI.toFloat()
+        val v = (0.3f + Random.nextFloat()) * speed * d
+        fireParticles += FireParticle(x, y, cos(a) * v, sin(a) * v - speed * d * 0.5f, 0.6f + Random.nextFloat() * 0.8f, (1.2f + Random.nextFloat() * 1.8f) * d, 2)
+    }
+
+    /** Yanan nesnenin şu anki kutusu (takip ediliyorsa hedefle birlikte kayar). */
+    private fun fireBox(f: Fire): RectF? {
+        val b = f.box ?: return null
+        val t = f.target ?: return b
+        val dx = t.box.left - b.left
+        val dy = t.box.top - b.top
+        return RectF(b.left + dx, b.top + dy, b.right + dx, b.bottom + dy)
+    }
+
+    private fun updateFires(dt: Float, now: Long) {
+        val iter = fires.iterator()
+        while (iter.hasNext()) {
+            val f = iter.next()
+            val el = (now - f.start).toFloat()
+            val dst = fireBox(f)
+            val intensity = when {
+                f.box == null -> 0.7f * (1f - el / (f.until - f.start))
+                !f.exploded -> 0.45f + 0.55f * (el / f.igniteMs).coerceAtMost(1f)
+                else -> 1f - 0.85f * ((el - f.igniteMs) / (f.until - f.start - f.igniteMs)).coerceIn(0f, 1f)
+            }
+            val scale = dst?.let { (it.width() / (140 * d)).coerceIn(0.7f, 2.2f) } ?: 1f
+            f.emit += dt * 55f * intensity
+            while (f.emit >= 1f) {
+                f.emit -= 1f
+                val p = if (dst != null) {
+                    f.cut?.let { c -> if (!f.exploded) randomOpaquePoint(c, dst) else null }
+                        ?: floatArrayOf(dst.left + Random.nextFloat() * dst.width(), dst.top + dst.height() * (0.35f + 0.65f * Random.nextFloat()))
+                } else floatArrayOf(f.x + (Random.nextFloat() - 0.5f) * 60 * d, f.y + (Random.nextFloat() - 0.5f) * 12 * d)
+                spawnFlame(p[0], p[1], scale)
+                if (Random.nextFloat() < 0.3f) spawnSmoke(p[0], p[1] - 20 * d * scale, scale)
+                if (Random.nextFloat() < 0.12f) spawnEmber(p[0], p[1], 120f)
+            }
+            if (!f.exploded && dst != null && el >= f.igniteMs) explode(f, dst)
+            if (now >= f.until) {
+                sfx?.stop(f.loopStream)
+                iter.remove()
+            }
+        }
+    }
+
+    /** Yanan nesne patlar: alev topu, duman, kıvılcımlar; nesne kırılır ve yanık enkaz kalır. */
+    private fun explode(f: Fire, dst: RectF) {
+        f.exploded = true
+        val now = SystemClock.uptimeMillis()
+        val cx = dst.centerX()
+        val cy = dst.centerY()
+        val h = PendingHit(cx, cy, Weapon.MOLOTOV).also { it.done = true }
+        val t = f.target
+        if (t != null && !t.isBroken(now)) {
+            breakObject(f.cut, t.info, t.info.label, t, h, "patladı! 💥")
+        } else if (t == null && f.cut != null) {
+            val (info, name) = nameFor(f.cut)
+            breakObject(f.cut, info, name, null, h, "patladı! 💥")
+        }
+        val sc = (dst.width() / (140 * d)).coerceIn(0.8f, 2.5f)
+        repeat(45) {
+            val a = Random.nextFloat() * 2f * PI.toFloat()
+            val v = (60 + Random.nextFloat() * 260) * d * sc
+            fireParticles += FireParticle(cx, cy, cos(a) * v, sin(a) * v - 80 * d, 0.5f + Random.nextFloat() * 0.5f, (18 + Random.nextFloat() * 22) * d * sc, 0)
+        }
+        repeat(25) { spawnSmoke(cx + (Random.nextFloat() - 0.5f) * dst.width(), cy, sc * 1.4f) }
+        repeat(40) { spawnEmber(cx, cy, 420f) }
+        sfx?.explosion()
+        haptics?.invoke(Material.VEHICLE)
+        shake = 28f
+        flash = 0.6f
+    }
+
+    /** Dokunulan noktaya gökten dev bir kaya düşer. */
+    private fun dropBoulder(x: Float, y: Float) {
+        val now = SystemClock.uptimeMillis()
+        lastThrow = now
+        shots++
+        val target = findTarget(x, y, Weapon.BOULDER.hitPadDp * d, now)
+        val r = ((target?.box?.width() ?: 0f) * 0.5f).coerceIn(70 * d, 170 * d)
+        val b = Boulder(x, y, r, Weapon.BOULDER.duration)
+        b.restY = if (target != null) target.box.bottom - target.box.height() * 0.32f - r * 0.55f else y - r * 0.35f
+        falling += b to newHit(x, y, Weapon.BOULDER, aimed = target)
+        sfx?.fall()
+    }
+
+    private fun land(b: Boulder, h: PendingHit) {
+        val now = SystemClock.uptimeMillis()
+        b.landed = true
+        b.until = now + WRECK_MS
+        val target = h.aimed?.takeIf { !it.isBroken(now) } ?: findTarget(h.x, h.y, h.weapon.hitPadDp * d, now)
+        val cut = cutFor(h, target)
+        sfx?.impact()
+        haptics?.invoke(Material.VEHICLE)
+        shake = 32f
+        flash = 0.2f
+        val groundY = b.restY + b.r * 0.6f
+        burst(b.x, groundY, 50, intArrayOf(0xFF9C8B74.toInt(), 0xFF6E6457.toInt(), 0xFFC9B8A0.toInt()), 420f)
+        repeat(22) { spawnSmoke(b.x + (Random.nextFloat() - 0.5f) * b.r * 2.4f, groundY, 1.6f) }
+        if (target != null) {
+            b.target = target
+            b.anchor = RectF(target.box)
+            b.crushed = cut
+            b.crushBox = RectF(target.box)
+            breakObject(cut, target.info, target.info.label, target, h, "ezildi!")
+        } else if (cut != null) {
+            b.crushed = cut
+            b.crushBox = RectF(cut.box)
+            val (info, name) = nameFor(cut)
+            breakObject(cut, info, name, null, h, "ezildi!")
+        } else {
+            popup(b.x, groundY - b.r, "Gümm!", 0xFFE0D2B8.toInt())
+        }
+        rocks += b
+    }
+
+    /** Kaya hedefle birlikte kayar. */
+    private fun rockOffset(b: Boulder): FloatArray {
+        val t = b.target ?: return floatArrayOf(0f, 0f)
+        val a = b.anchor ?: return floatArrayOf(0f, 0f)
+        return floatArrayOf(t.box.left - a.left, t.box.top - a.top)
     }
 
     private fun burst(x: Float, y: Float, n: Int, colors: IntArray, speed: Float) {
@@ -676,6 +864,24 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             if (p.t >= 1f && p.hit.ready(now)) { pit.remove(); landed += p.hit }
         }
         landed.forEach { resolve(it) }
+
+        val fit = falling.iterator()
+        val toLand = ArrayList<Pair<Boulder, PendingHit>>()
+        while (fit.hasNext()) {
+            val fb = fit.next()
+            fb.first.t = min(1f, fb.first.t + dt / fb.first.fallSec)
+            if (fb.first.t >= 1f && fb.second.ready(now)) { fit.remove(); toLand += fb }
+        }
+        toLand.forEach { land(it.first, it.second) }
+        rocks.removeAll { now >= it.until }
+        updateFires(dt, now)
+        fireParticles.removeAll { p ->
+            p.age += dt
+            if (p.kind == 2) p.vy += 500f * d * dt else { p.vx *= 0.98f; p.vy *= 0.985f }
+            p.x += p.vx * dt; p.y += p.vy * dt
+            p.age >= p.life
+        }
+        if (fireParticles.size > 900) fireParticles.subList(0, fireParticles.size - 900).clear()
 
         swing?.let { s ->
             s.t = min(1f, s.t + dt / s.hit.weapon.duration)
@@ -772,7 +978,42 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             else if (showBoxes) drawMarker(c, t, now)
         }
 
+        // Yanan nesneler kararır; patlama sonrası yanık izi
+        for (f in fires) {
+            val dst = fireBox(f) ?: continue
+            val cut = f.cut
+            if (!f.exploded && cut != null) {
+                drawCharred(c, cut, dst, ((now - f.start).toFloat() / f.igniteMs).coerceIn(0f, 1f) * 0.85f)
+            }
+        }
+        // Kayalar: altında yassılmış nesne, üstünde kaya
+        for (b in rocks) {
+            val off = rockOffset(b)
+            val a = (255 * min(1f, (b.until - now) / 800f)).toInt().coerceIn(0, 255)
+            val cb = b.crushBox
+            val cr = b.crushed
+            if (cr != null && cb != null) {
+                drawCrushed(c, cr, RectF(cb.left + off[0], cb.top + off[1], cb.right + off[0], cb.bottom + off[1]), a)
+            }
+            drawRock(c, b.x + off[0], b.restY + off[1], b.r, b.rot, b.shape, a, d)
+        }
+
         drawShards(c, shards)
+        drawFireParticles(c, fireParticles, flameSprite, smokeSprite)
+        // Düşen kayalar: hedefte büyüyen gölge, hız çizgileri
+        for ((b, _) in falling) {
+            val e = b.t * b.t
+            val y = -b.r * 1.5f + (b.restY + b.r * 1.5f) * e
+            shadowPaint.alpha = (140 * b.t).toInt()
+            tmpRect.set(b.x - b.r * 0.9f * b.t, b.restY + b.r * 0.5f, b.x + b.r * 0.9f * b.t, b.restY + b.r * 0.75f)
+            c.drawOval(tmpRect, shadowPaint)
+            shadowPaint.alpha = 64
+            markerPaint.color = Color.WHITE
+            markerPaint.alpha = 90
+            markerPaint.strokeWidth = 2 * d
+            for (k in -1..1) c.drawLine(b.x + k * b.r * 0.4f, y - b.r * 1.1f, b.x + k * b.r * 0.4f, y - b.r * 2.2f, markerPaint)
+            drawRock(c, b.x, y, b.r, b.rot + b.t * 40f, b.shape, 255, d)
+        }
 
         for (q in particles) {
             particlePaint.color = q.color
@@ -882,6 +1123,10 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     }
 
     private fun drawAmmo(c: Canvas, type: Weapon, x: Float, y: Float, r: Float, spin: Float) {
+        if (type == Weapon.MOLOTOV) {
+            drawMolotov(c, x, y, r * 0.75f, Math.toDegrees(spin.toDouble()).toFloat(), flameSprite, SystemClock.uptimeMillis())
+            return
+        }
         c.save()
         c.translate(x, y)
         c.rotate(Math.toDegrees(spin.toDouble()).toFloat())
@@ -922,6 +1167,16 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private fun drawHand(c: Canvas, now: Long) {
         when {
             weapon == Weapon.SLING -> drawSling(c, now)
+            weapon.drop -> {
+                // Kaya elde değil, gökte: köşede küçük bir simge ve nişan ipucu
+                val ready = now - lastThrow > RELOAD_MS
+                drawRock(c, width - 60 * d, height - 150 * d, 34 * d, 15f, iconRock, if (ready) 255 else 90, d)
+            }
+            weapon == Weapon.MOLOTOV -> {
+                val ready = now - lastThrow > RELOAD_MS
+                val bob = sin(now / 400f) * 3 * d
+                drawMolotov(c, width / 2f, handY() + bob + if (ready) 0f else 80 * d, 30 * d, -12f, flameSprite, now)
+            }
             weapon.thrown -> {
                 val ready = now - lastThrow > RELOAD_MS
                 val r = weapon.radiusDp * d * 1.3f

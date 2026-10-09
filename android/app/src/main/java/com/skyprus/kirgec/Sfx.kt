@@ -11,6 +11,7 @@ import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln
+import kotlin.math.min
 import kotlin.math.sin
 import kotlin.random.Random
 
@@ -52,6 +53,12 @@ class Sfx(context: Context) {
             add("clank", 2) { synthClank(it) }
             add("sling", 2) { synthSling(it) }
             add("bounce", 2) { synthBounce(it) }
+            add("shatter_vehicle", 2) { synthVehicle(it) }
+            add("ignite", 1) { synthIgnite(it) }
+            add("fire", 1) { synthFireLoop(it) }
+            add("explosion", 2) { synthExplosion(it) }
+            add("fall", 1) { synthFall() }
+            add("impact", 2) { synthImpact(it) }
         }.start()
     }
 
@@ -62,6 +69,16 @@ class Sfx(context: Context) {
     fun swing() = play("swing", 0.7f)
     /** Yakın dövüş aletinin çarpma sesi (kırılma sesinin üstüne de çalınır). */
     fun sling() = play("sling", 0.9f)
+    fun ignite() = play("ignite")
+    fun explosion() = play("explosion")
+    fun fall() = play("fall", 0.8f)
+    fun impact() = play("impact")
+    /** Döngüde çalan yangın çıtırtısı; dönen kimlikle [stop] edilir. */
+    fun fireLoop(): Int {
+        val id = synchronized(sounds) { sounds["fire"]?.firstOrNull() } ?: return 0
+        return pool.play(id, 0.55f, 0.55f, 1, -1, 1f)
+    }
+    fun stop(stream: Int) { if (stream != 0) pool.stop(stream) }
     fun bounce() = play("bounce", 0.7f)
     fun melee(w: Weapon) = play(if (w == Weapon.WRENCH) "clank" else "bat")
 
@@ -223,6 +240,85 @@ class Sfx(context: Context) {
                 out[i] += sin(phase) * exp(-t * 30f)
             }
             noise(out, r, 0f, 0.03f, 900f, 'l', 0.4f)
+            return out
+        }
+
+        /** Araç: ezilen metal + kırılan camlar. */
+        fun synthVehicle(r: Random): FloatArray {
+            val out = buf(1.1f)
+            noise(out, r, 0f, 0.7f, 700f, 'l', 1.0f)
+            noise(out, r, 0.02f, 0.4f, 3000f, 'h', 0.5f)
+            for ((mul, g) in listOf(1f to 0.2f, 2.3f to 0.15f, 3.9f to 0.1f)) ping(out, 0.01f, 260f * mul, 0.5f, g)
+            repeat(8) { ping(out, r.nextFloat() * 0.3f, 2500f + r.nextFloat() * 4000f, 0.2f + r.nextFloat() * 0.4f, 0.06f) }
+            return out
+        }
+
+        /** Molotofun tutuşması: yükselen "vuuf". */
+        fun synthIgnite(r: Random): FloatArray {
+            val out = buf(0.8f)
+            var lp = 0f
+            for (i in out.indices) {
+                val t = i.toFloat() / SR
+                val a = (2f * PI.toFloat() * (300f + 1500f * t) / SR).coerceAtMost(1f)
+                lp += a * (r.nextFloat() * 2f - 1f - lp)
+                out[i] = lp * min(1f, t * 12f) * exp(-t * 3.5f)
+            }
+            return out
+        }
+
+        /** Yangın çıtırtısı (döngüye uygun, 2 sn). */
+        fun synthFireLoop(r: Random): FloatArray {
+            val out = buf(2f)
+            noise(out, r, 0f, 2f, 500f, 'l', 0.0f)
+            var lp = 0f
+            for (i in out.indices) {
+                lp += 0.02f * (r.nextFloat() * 2f - 1f - lp)
+                out[i] += lp * 3f
+            }
+            repeat(70) {
+                val s0 = r.nextFloat() * 1.95f
+                noise(out, r, s0, 0.012f + r.nextFloat() * 0.02f, 2500f, 'h', 0.5f + r.nextFloat())
+            }
+            return out
+        }
+
+        /** Patlama: derin gümbürtü. */
+        fun synthExplosion(r: Random): FloatArray {
+            val out = buf(2.2f)
+            noise(out, r, 0f, 2.0f, 160f, 'l', 2.5f)
+            noise(out, r, 0f, 0.5f, 1500f, 'l', 0.8f)
+            var phase = 0f
+            for (i in out.indices) {
+                val t = i.toFloat() / SR
+                phase += 2f * PI.toFloat() * (55f * exp(-t * 1.5f) + 30f) / SR
+                out[i] += sin(phase) * 0.9f * exp(-t * 2.2f)
+            }
+            return out
+        }
+
+        /** Düşen kayanın ıslığı (inen ton). */
+        fun synthFall(): FloatArray {
+            val out = buf(0.9f)
+            var phase = 0f
+            for (i in out.indices) {
+                val t = i.toFloat() / SR
+                phase += 2f * PI.toFloat() * (1300f - 1000f * t / 0.9f) / SR
+                out[i] = sin(phase) * 0.35f * min(1f, t * 5f)
+            }
+            return out
+        }
+
+        /** Kayanın yere/nesneye çarpması: ağır, uzun gümleme. */
+        fun synthImpact(r: Random): FloatArray {
+            val out = buf(1.4f)
+            var phase = 0f
+            for (i in out.indices) {
+                val t = i.toFloat() / SR
+                phase += 2f * PI.toFloat() * (70f * exp(-t * 4f) + 38f) / SR
+                out[i] += sin(phase) * exp(-t * 3f)
+            }
+            noise(out, r, 0f, 1.2f, 400f, 'l', 1.6f)
+            noise(out, r, 0f, 0.15f, 2000f, 'b', 0.5f)
             return out
         }
 
