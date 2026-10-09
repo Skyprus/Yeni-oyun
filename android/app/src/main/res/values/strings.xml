@@ -3,9 +3,12 @@
     <string name="app_name">Kır Geç AR</string>
     <string name="w_ball">⚽ Top</string>
     <string name="w_stone">🪨 Taş</string>
+    <string name="w_sling">🏹 Sapan</string>
     <string name="w_bat">🏏 Sopa</string>
     <string name="w_wrench">🔧 Anahtar</string>
     <string name="boxes">👁</string>
+    <string name="select">🎯 Seç</string>
+    <string name="scan">🔍 Tara</string>
     <string name="permission_text">Oyun, etrafındaki kırılabilir eşyaları görmek için kameraya ihtiyaç duyar. Görüntü telefonundan dışarı çıkmaz.</string>
     <string name="permission_button">Kamera iznini ver</string>
 </resources>

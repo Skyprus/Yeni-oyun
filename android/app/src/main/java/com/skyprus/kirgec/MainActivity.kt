@@ -42,6 +42,8 @@ class MainActivity : ComponentActivity() {
     private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     @Volatile private var detector: Detector? = null
     @Volatile private var segmenter: Segmenter? = null
+    @Volatile private var scanner: ScanDetector? = null
+    @Volatile private var scanning = false
     private val segExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private var camera: Camera? = null
 
@@ -95,6 +97,7 @@ class MainActivity : ComponentActivity() {
         val weaponButtons = mapOf(
             Weapon.BALL to findViewById<TextView>(R.id.btnBall),
             Weapon.STONE to findViewById<TextView>(R.id.btnStone),
+            Weapon.SLING to findViewById<TextView>(R.id.btnSling),
             Weapon.BAT to findViewById<TextView>(R.id.btnBat),
             Weapon.WRENCH to findViewById<TextView>(R.id.btnWrench),
         )
@@ -103,10 +106,20 @@ class MainActivity : ComponentActivity() {
             btn.setOnClickListener {
                 game.weapon = w
                 weaponButtons.forEach { (k, b) -> b.isSelected = k == w }
-                game.hint(if (w.thrown) "${w.label}: yukarı kaydır ya da dokun → fırlat"
-                else "${w.label}: vurmak istediğin yere dokun")
+                game.selectMode = false
+                game.hint(when {
+                    w == Weapon.SLING -> "Sapan: parmağını aşağı çek, nişan al, bırak"
+                    w == Weapon.BALL -> "Top: fırlat — seçili nesneler varsa aralarında seker"
+                    w.thrown -> "${w.label}: yukarı kaydır ya da dokun → fırlat"
+                    else -> "${w.label}: vurmak istediğin yere dokun"
+                })
             }
         }
+        val btnSelect = findViewById<TextView>(R.id.btnSelect)
+        btnSelect.setOnClickListener { game.selectMode = !game.selectMode }
+        game.onSelectModeChanged = { btnSelect.isSelected = it }
+        val btnScan = findViewById<TextView>(R.id.btnScan)
+        btnScan.setOnClickListener { scan(btnScan) }
         val btnBoxes = findViewById<TextView>(R.id.btnBoxes)
         btnBoxes.setOnClickListener {
             game.showBoxes = !game.showBoxes
@@ -116,7 +129,10 @@ class MainActivity : ComponentActivity() {
             permissionLauncher.launch(Manifest.permission.CAMERA)
         }
 
-        segExecutor.execute { segmenter = Segmenter.create(applicationContext) }
+        segExecutor.execute {
+            segmenter = Segmenter.create(applicationContext)
+            scanner = ScanDetector.create(applicationContext)
+        }
 
         // Model kamera açılırken arka planda yüklenir
         analysisExecutor.execute {
@@ -161,7 +177,8 @@ class MainActivity : ComponentActivity() {
                     ResolutionSelector.Builder()
                         .setAspectRatioStrategy(ratio)
                         .setResolutionStrategy(
-                            ResolutionStrategy(Size(640, 480), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
+                            // Yüksek çözünürlük: kare kare parçalı tanımada küçük nesneler de seçilebilsin
+                            ResolutionStrategy(Size(1280, 960), ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER)
                         )
                         .build()
                 )
@@ -182,6 +199,25 @@ class MainActivity : ComponentActivity() {
                 game.status = "Kamera açılamadı: ${e.message}"
             }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    /** Ayrıntılı tarama: ekrandaki kareyi parça parça tarar, kırılabilir eşyaları seçer. */
+    private fun scan(button: View) {
+        if (scanning) return
+        val sc = scanner
+        if (sc == null) { game.hint("Tarayıcı henüz hazır değil, birazdan tekrar dene."); return }
+        val frame = previewView.bitmap ?: return
+        scanning = true
+        button.isSelected = true
+        game.hint("Taranıyor… telefonu sabit tut")
+        segExecutor.execute {
+            val dets = try { sc.scan(frame) } catch (e: Throwable) { emptyList() } finally { frame.recycle() }
+            game.post {
+                scanning = false
+                button.isSelected = false
+                game.addScan(dets)
+            }
+        }
     }
 
     /** Ekrandaki kareyi alır, (x, y)'deki nesneyi arka planda ayırır, sonucu ana iş parçacığına verir. */
@@ -236,6 +272,8 @@ class MainActivity : ComponentActivity() {
         segExecutor.execute {
             segmenter?.close()
             segmenter = null
+            scanner?.close()
+            scanner = null
         }
         segExecutor.shutdown()
         sfx.release()

@@ -38,7 +38,7 @@ val OTHER_LABELS: Map<String, String> = mapOf(
 val GENERIC_OBJECT = Breakable("Nesne", 1, 50, Material.CERAMIC)
 
 /**
- * Kırma aletleri. Fırlatılanlar (top, taş) hedefe uçar; yakın dövüş aletleri (sopa, İngiliz anahtarı)
+ * Kırma aletleri. Fırlatılanlar (top, taş, sapan taşı) hedefe uçar; top seçili nesneler arasında seker; yakın dövüş aletleri (sopa, İngiliz anahtarı)
  * dokunulan noktaya savrulur.
  */
 enum class Weapon(
@@ -52,6 +52,7 @@ enum class Weapon(
 ) {
     BALL("Top", true, 34f, 0.55f, 0.8f, 1, 22f),
     STONE("Taş", true, 22f, 0.38f, 1.25f, 2, 8f),
+    SLING("Sapan", true, 13f, 0.42f, 1.35f, 2, 8f),
     BAT("Sopa", false, 0f, 0.26f, 1.5f, 2, 16f),
     WRENCH("İngiliz anahtarı", false, 0f, 0.22f, 1.1f, 3, 10f),
 }

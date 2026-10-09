@@ -36,6 +36,12 @@ Kamera izni yalnızca **HTTPS** (veya `localhost`) üzerinde çalışır.
 - Nesne tanıma **MediaPipe + EfficientDet-Lite0** ile telefonun GPU'sunda çalışır. TensorFlow.js'ten belirgin şekilde hızlıdır.
 - Kamera **CameraX** ile ana arka lensi doğrudan kullanır. Tarayıcı kısıtlamaları yoktur.
 - Sesler ve titreşim yerel olarak çalınır.
+- **Her şey kırılabilir:** vurulan noktadaki nesne MediaPipe Interactive Segmenter ile tam silüetiyle ayrılır,
+  yeri çevresinden doldurularak silinir.
+- **Aletler:** ⚽ top (seçili nesneler arasında seker), 🪨 taş, 🏹 sapan (geri çek-bırak, nişan yolu görünür),
+  🏏 sopa ve 🔧 İngiliz anahtarı (yakın dövüş).
+- **🎯 Seç:** dokunduğun nesneleri hedef olarak işaretler (uzun basmak da seçer ve odaklar).
+- **🔍 Tara:** ekranı yüksek çözünürlükte parça parça tarar, kırılabilir eşyaları bulup seçer.
 
 **Kurulum:** Her push'ta GitHub Actions APK'yı derler ve *Releases* sayfasına koyar. Telefondan
 https://github.com/Skyprus/Yeni-oyun/releases/latest adresine gir, `KirGec.apk`'yı indirip aç.

@@ -50,6 +50,8 @@ class Sfx(context: Context) {
             add("swing", 2) { synthSwing(it) }
             add("bat", 2) { synthBat(it) }
             add("clank", 2) { synthClank(it) }
+            add("sling", 2) { synthSling(it) }
+            add("bounce", 2) { synthBounce(it) }
         }.start()
     }
 
@@ -59,6 +61,8 @@ class Sfx(context: Context) {
     fun throwSound() = play("throw", 0.6f)
     fun swing() = play("swing", 0.7f)
     /** Yakın dövüş aletinin çarpma sesi (kırılma sesinin üstüne de çalınır). */
+    fun sling() = play("sling", 0.9f)
+    fun bounce() = play("bounce", 0.7f)
     fun melee(w: Weapon) = play(if (w == Weapon.WRENCH) "clank" else "bat")
 
     private fun play(name: String, volume: Float = 1f) {
@@ -192,6 +196,33 @@ class Sfx(context: Context) {
                 ping(out, 0f, base * mul, 0.7f / (1f + mul * 0.15f), g)
             }
             noise(out, r, 0f, 0.04f, 3000f, 'h', 0.8f)
+            return out
+        }
+
+        /** Sapan lastiğinin bırakılması: titreşen düşük "tıng" ve hava sesi. */
+        fun synthSling(r: Random): FloatArray {
+            val out = buf(0.35f)
+            var phase = 0f
+            for (i in out.indices) {
+                val t = i.toFloat() / SR
+                val f = 140f + 60f * exp(-t * 20f) + 8f * sin(2f * PI.toFloat() * 28f * t)
+                phase += 2f * PI.toFloat() * f / SR
+                out[i] += sin(phase) * 0.6f * exp(-t * 14f)
+            }
+            noise(out, r, 0f, 0.12f, 1200f, 'b', 0.5f)
+            return out
+        }
+
+        /** Topun sekmesi: kısa, lastikli "pof". */
+        fun synthBounce(r: Random): FloatArray {
+            val out = buf(0.18f)
+            var phase = 0f
+            for (i in out.indices) {
+                val t = i.toFloat() / SR
+                phase += 2f * PI.toFloat() * (260f * exp(-t * 12f) + 90f) / SR
+                out[i] += sin(phase) * exp(-t * 30f)
+            }
+            noise(out, r, 0f, 0.03f, 900f, 'l', 0.4f)
             return out
         }
 

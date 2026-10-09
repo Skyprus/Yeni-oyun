@@ -18,6 +18,7 @@ import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
+import java.util.Locale
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -29,37 +30,69 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
 
-private const val WRECK_MS = 7000L   // kırılan nesnenin "yok" görüneceği süre
-private const val LOST_MS = 1200L    // görülmeyen hedefin silinme süresi
+private const val WRECK_MS = 7000L    // kırılan nesnenin "yok" görüneceği süre
+private const val LOST_MS = 1200L     // takip edilen hedef görülmezse silinme süresi
+private const val PINNED_MS = 45000L  // seçilen/taranan (sabit) hedeflerin ömrü
 private const val RELOAD_MS = 280L
-private const val SEG_WAIT_MS = 450L // çarpmada segmentasyon sonucunu en fazla bu kadar bekle
+private const val SEG_WAIT_MS = 450L  // çarpmada segmentasyon sonucunu en fazla bu kadar bekle
+private const val MAX_BOUNCES = 6
 
+/**
+ * Kırılabilir hedef. Otomatik tanınanlar kamera karelerinde takip edilir; [pinned] olanlar
+ * (seçilen ya da tarananlar) ekranda sabit kalır, aynı sınıftan bir tespitle örtüşürse onu izler.
+ */
 class Target(
     val cls: String,
     val info: Breakable,
     val box: RectF,
     var hp: Int,
     var lastSeen: Long,
+    val pinned: Boolean = false,
 ) {
     val cracks = ArrayList<FloatArray>()
     var wreck: Wreck? = null
+    var selected = false
+    var cut: Cutout? = null
+    val created = SystemClock.uptimeMillis()
     fun isBroken(now: Long) = wreck?.let { now < it.until } ?: false
 }
 
 /** Bir vuruş: hedef noktası ve o noktadaki nesnenin (arka planda hesaplanan) kesiti. */
-private class PendingHit(val x: Float, val y: Float, val weapon: Weapon) {
+private class PendingHit(
+    val x: Float,
+    val y: Float,
+    val weapon: Weapon,
+    val chain: Int = 0,
+    val visited: Set<Target> = emptySet(),
+    val aimed: Target? = null,
+) {
     val created = SystemClock.uptimeMillis()
     @Volatile var cut: Cutout? = null
     @Volatile var done = false
     fun ready(now: Long) = done || now - created > SEG_WAIT_MS
 }
 
-private class Projectile(val hit: PendingHit, val sx: Float, val sy: Float, val arc: Float) {
+private class Projectile(
+    val hit: PendingHit,
+    val sx: Float,
+    val sy: Float,
+    val arc: Float,
+    val dur: Float,
+    val s0: Float,
+    val s1: Float,
+) {
     var t = 0f
     var spin = 0f
 }
 
-private class Swing(val hit: PendingHit, val start: Long) {
+/** Sekecek nesne kalmayınca yere düşüp seken top. */
+private class DropBall(var x: Float, var y: Float, var vx: Float, var vy: Float, val r: Float) {
+    var age = 0f
+    var spin = 0f
+    var bounces = 0
+}
+
+private class Swing(val hit: PendingHit) {
     var t = 0f
     var impacted = false
 }
@@ -76,11 +109,12 @@ private class Popup(val x: Float, var y: Float, val text: String, val color: Int
 }
 
 /**
- * Kamera önizlemesinin üstünde duran oyun katmanı: hedef takibi, atış/savurma, kırılma efektleri ve HUD.
- * Kendi kendini her karede yeniden çizer (postInvalidateOnAnimation).
+ * Kamera önizlemesinin üstünde duran oyun katmanı: hedef takibi, seçim, atış/savurma/sapan,
+ * seken top, kırılma efektleri ve HUD. Kendi kendini her karede yeniden çizer.
  */
 class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private val d = resources.displayMetrics.density
+    private val tr = Locale("tr")
 
     /** Ekranda görünen kamera karesini (ekran pikselleriyle) verir. */
     var frameProvider: (() -> Bitmap?)? = null
@@ -93,19 +127,30 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     var onFocusRequest: ((Float, Float) -> Unit)? = null
     /** İki parmakla yakınlaştırma: çarpan. */
     var onZoom: ((Float) -> Unit)? = null
+    var onSelectModeChanged: ((Boolean) -> Unit)? = null
     /** Tanı satırı: modelin gördüğü her şey, tahmin süresi. */
     var info = ""
     var insetTop = 0
 
     var weapon = Weapon.BALL
+        set(v) { field = v; pulling = false }
     var showBoxes = true
+    /** Seçim modu: dokunulan nesne seçilir/seçim kaldırılır, vuruş yapılmaz. */
+    var selectMode = false
+        set(v) {
+            field = v
+            onSelectModeChanged?.invoke(v)
+            hint(if (v) "Seçim modu: kırmak istediğin nesnelere dokun (tekrar dokun: kaldır)" else selectionHint())
+        }
     var status = "Kamera açılıyor…"
+    private var statusT = 0L
     private var modelState = 0 // 0 yükleniyor, 1 hazır, -1 yok
 
     private val targets = ArrayList<Target>()
     private val looseWrecks = ArrayList<Wreck>() // takip edilmeyen nesnelerin izleri
     private var seen: List<Pair<String, RectF>> = emptyList() // son karede görülen her şey (ekran koordinatı)
     private val projectiles = ArrayList<Projectile>()
+    private val drops = ArrayList<DropBall>()
     private var swing: Swing? = null
     private val shards = ArrayList<Shard>()
     private val particles = ArrayList<Particle>()
@@ -117,16 +162,19 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private var shake = 0f
     private var flash = 0f
     private var lastFrame = 0L
-
-    // Uzun basışla seçilen nesnenin vurgusu
-    private var selection: Cutout? = null
-    private var selectionT = 0L
+    private var lastScale = 1f
+    private var lastOx = 0f
+    private var lastOy = 0f
 
     // Dokunma durumu
     private var downX = 0f
     private var downY = 0f
     private var downT = 0L
     private var pointerDown = false
+    // Sapan
+    private var pulling = false
+    private var pullX = 0f
+    private var pullY = 0f
 
     private val stoneShape = FloatArray(18).also {
         for (i in 0 until 9) {
@@ -136,28 +184,29 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         }
     }
 
-    // ---------- Model durumu ve tespitler ----------
+    // ---------- Durum ----------
 
     /** Birkaç saniye ekranda kalan bilgi mesajı (otomatik durum mesajları üzerine yazmaz). */
     fun hint(text: String) {
         status = text
-        selectionT = SystemClock.uptimeMillis()
+        statusT = SystemClock.uptimeMillis()
     }
 
     fun setModelReady(ok: Boolean) {
         modelState = if (ok) 1 else -1
-        status = if (ok) IDLE_STATUS else "Otomatik tanıma kapalı — yine de istediğin nesneye vurabilirsin."
+        hint(if (ok) IDLE_STATUS else "Otomatik tanıma kapalı — yine de istediğin nesneye vurabilirsin.")
     }
 
-    private fun iou(a: RectF, b: RectF): Float {
-        val x1 = max(a.left, b.left); val y1 = max(a.top, b.top)
-        val x2 = min(a.right, b.right); val y2 = min(a.bottom, b.bottom)
-        val inter = max(0f, x2 - x1) * max(0f, y2 - y1)
-        val union = a.width() * a.height() + b.width() * b.height() - inter
-        return if (union > 0f) inter / union else 0f
+    private fun selectedCount(now: Long) = targets.count { it.selected && !it.isBroken(now) }
+
+    private fun selectionHint(): String {
+        val n = selectedCount(SystemClock.uptimeMillis())
+        return if (n > 0) "$n nesne seçili — topu at, aralarında seksin!" else IDLE_STATUS
     }
 
     private fun labelOf(cls: String) = BREAKABLES[cls]?.label ?: OTHER_LABELS[cls] ?: cls
+
+    // ---------- Tespitler ----------
 
     /** Ana iş parçacığında çağrılır. Kutular görüntü piksellerindedir (iw x ih). */
     fun ingest(dets: List<Det>, iw: Int, ih: Int, ms: Long) {
@@ -165,43 +214,108 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             .joinToString(", ") { labelOf(it.cls) + " " + (it.score * 100).toInt() + "%" }
         if (width == 0 || height == 0) return
         val now = SystemClock.uptimeMillis()
-        val scale = max(width / iw.toFloat(), height / ih.toFloat())
-        val ox = (width - iw * scale) / 2f
-        val oy = (height - ih * scale) / 2f
-        fun toScreen(r: RectF) = RectF(r.left * scale + ox, r.top * scale + oy, r.right * scale + ox, r.bottom * scale + oy)
-        seen = dets.filter { it.score >= 0.35f }.map { it.cls to toScreen(it.box) }
+        lastScale = max(width / iw.toFloat(), height / ih.toFloat())
+        lastOx = (width - iw * lastScale) / 2f
+        lastOy = (height - ih * lastScale) / 2f
+        val screen = dets.map { Det(it.cls, toScreen(it.box), it.score) }
+        seen = (screen.filter { it.score >= 0.35f }.map { it.cls to it.box } +
+            seen.filter { s -> screen.none { iou(it.box, s.second) > 0.3f } }.take(10)).take(30)
+        merge(screen.filter { BREAKABLES.containsKey(it.cls) }, now, pin = false)
+        targets.removeAll { t ->
+            !t.isBroken(now) && if (t.pinned) now - t.created > PINNED_MS
+            else now - t.lastSeen > if (t.selected) PINNED_MS else LOST_MS
+        }
+        if (modelState == 1 && now - statusT > 2500) {
+            val live = targets.count { !it.isBroken(now) }
+            status = when {
+                selectedCount(now) > 0 -> selectionHint()
+                live > 0 -> "$live kırılabilir eşya görüldü — vur! (her şeyi kırabilirsin)"
+                else -> IDLE_STATUS
+            }
+        }
+    }
 
+    private fun toScreen(r: RectF) =
+        RectF(r.left * lastScale + lastOx, r.top * lastScale + lastOy, r.right * lastScale + lastOx, r.bottom * lastScale + lastOy)
+
+    /** Tespitleri mevcut hedeflerle eşleştirir (takip), yenilerini ekler. */
+    private fun merge(dets: List<Det>, now: Long, pin: Boolean): Int {
+        var added = 0
         val used = HashSet<Target>()
         for (det in dets) {
             val info = BREAKABLES[det.cls] ?: continue
-            val box = toScreen(det.box)
             var best: Target? = null
             var bestScore = 0.15f
             for (t in targets) {
                 if (t.cls != det.cls || t in used) continue
-                val s = iou(t.box, box)
+                val s = iou(t.box, det.box)
                 if (s > bestScore) { best = t; bestScore = s }
             }
             if (best != null) {
                 val k = 0.5f // yumuşatma
                 best.box.set(
-                    best.box.left + (box.left - best.box.left) * k,
-                    best.box.top + (box.top - best.box.top) * k,
-                    best.box.right + (box.right - best.box.right) * k,
-                    best.box.bottom + (box.bottom - best.box.bottom) * k,
+                    best.box.left + (det.box.left - best.box.left) * k,
+                    best.box.top + (det.box.top - best.box.top) * k,
+                    best.box.right + (det.box.right - best.box.right) * k,
+                    best.box.bottom + (det.box.bottom - best.box.bottom) * k,
                 )
                 best.lastSeen = now
+                if (pin && !best.selected) { best.selected = true; added++ }
                 used += best
             } else {
-                val t = Target(det.cls, info, box, info.hp, now)
+                val t = Target(det.cls, info, RectF(det.box), info.hp, now, pinned = pin)
+                t.selected = pin
                 targets += t
                 used += t
+                added++
             }
         }
-        targets.removeAll { now - it.lastSeen > LOST_MS && !it.isBroken(now) }
-        if (modelState == 1 && now - selectionT > 2500) {
-            val live = targets.count { !it.isBroken(now) }
-            status = if (live > 0) "$live kırılabilir eşya görüldü — vur! (her şeyi kırabilirsin)" else IDLE_STATUS
+        return added
+    }
+
+    /** Ayrıntılı taramanın sonucu (ekran koordinatı): kırılabilir olanlar seçilir. */
+    fun addScan(dets: List<Det>) {
+        val now = SystemClock.uptimeMillis()
+        val breakables = dets.filter { BREAKABLES.containsKey(it.cls) }
+        val n = merge(breakables, now, pin = true)
+        seen = (dets.map { it.cls to it.box } + seen).take(40)
+        val names = breakables.groupBy { labelOf(it.cls) }.entries.joinToString(", ") { "${it.key} ×${it.value.size}" }
+        hint(if (breakables.isEmpty()) "Tarama: kırılabilir eşya bulunamadı (${dets.size} başka nesne). Seç ile kendin işaretle."
+        else "Tarama: $names — ${selectedCount(now)} nesne seçili" + if (n == 0) " (zaten seçiliydi)" else "")
+    }
+
+    // ---------- Seçim ----------
+
+    private fun selectAt(x: Float, y: Float) {
+        val now = SystemClock.uptimeMillis()
+        // Seçili bir nesneye dokunulduysa seçimi kaldır
+        targets.filter { it.selected && !it.isBroken(now) && it.box.contains(x, y) }
+            .minByOrNull { it.box.width() * it.box.height() }?.let { t ->
+                t.selected = false
+                if (t.pinned) targets.remove(t)
+                hint("Seçim kaldırıldı · ${selectionHint()}")
+                return
+            }
+        hint("Seçiliyor…")
+        segmentAt?.invoke(x, y) { cut ->
+            if (cut == null) {
+                hint("Burada seçilebilecek bir nesne bulunamadı (duvar/zemin çok büyük).")
+                return@invoke
+            }
+            val t2 = SystemClock.uptimeMillis()
+            // Takip edilen bir hedefle örtüşüyorsa onu seç, değilse sabit hedef oluştur
+            val tracked = targets.filter { !it.isBroken(t2) && (iou(it.box, cut.box) > 0.3f || it.box.contains(x, y)) }
+                .minByOrNull { it.box.width() * it.box.height() }
+            val t = tracked ?: run {
+                val cls = clsFor(cut.box)
+                val base = cls?.let { BREAKABLES[it] } ?: GENERIC_OBJECT
+                val name = cls?.let { labelOf(it).replaceFirstChar { c -> c.titlecase(tr) } } ?: "Nesne"
+                Target(cls ?: "object", base.copy(label = name), RectF(cut.box), base.hp, t2, pinned = true)
+                    .also { targets += it }
+            }
+            t.selected = true
+            t.cut = cut
+            hint("Seçildi: ${t.info.label} · ${selectionHint()}")
         }
     }
 
@@ -216,27 +330,14 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private var focusRing: FloatArray? = null // x, y
     private var focusT = 0L
 
-    /** Uzun basış: o noktaya odaklan ve oradaki nesneyi seçip vurgula. */
+    /** Uzun basış: o noktaya odaklan ve oradaki nesneyi seç. */
     private val longPress = Runnable {
-        if (!pointerDown) return@Runnable
+        if (!pointerDown || pulling) return@Runnable
         pointerDown = false
-        val x = downX
-        val y = downY
-        focusRing = floatArrayOf(x, y)
+        focusRing = floatArrayOf(downX, downY)
         focusT = SystemClock.uptimeMillis()
-        onFocusRequest?.invoke(x, y)
-        status = "Seçiliyor…"
-        selectionT = SystemClock.uptimeMillis()
-        segmentAt?.invoke(x, y) { cut ->
-            selectionT = SystemClock.uptimeMillis()
-            if (cut != null) {
-                selection = cut
-                status = "Seçildi: ${nameFor(cut.box)} — şimdi vur!"
-            } else {
-                selection = null
-                status = "Burada kırılabilecek bir nesne bulunamadı (duvar/zemin çok büyük)."
-            }
-        }
+        onFocusRequest?.invoke(downX, downY)
+        selectAt(downX, downY)
     }
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
@@ -244,23 +345,38 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         if (e.pointerCount > 1 || scaleDetector.isInProgress) {
             // İki parmak: yakınlaştırma, vuruş değil
             pointerDown = false
+            pulling = false
             removeCallbacks(longPress)
             return true
         }
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 downX = e.x; downY = e.y; downT = SystemClock.uptimeMillis(); pointerDown = true
-                postDelayed(longPress, 450)
+                if (weapon == Weapon.SLING && !selectMode) {
+                    pulling = true
+                    pullX = 0f; pullY = 0f
+                } else {
+                    postDelayed(longPress, 450)
+                }
             }
             MotionEvent.ACTION_MOVE -> {
                 if (hypot(e.x - downX, e.y - downY) > 12 * d) removeCallbacks(longPress)
+                if (pulling) {
+                    // Lastik en fazla MAX_PULL kadar gerilir
+                    var px = e.x - downX
+                    var py = e.y - downY
+                    val len = hypot(px, py)
+                    val maxPull = MAX_PULL * d
+                    if (len > maxPull) { px *= maxPull / len; py *= maxPull / len }
+                    pullX = px; pullY = py
+                }
             }
             MotionEvent.ACTION_UP -> {
                 removeCallbacks(longPress)
                 performClick()
                 onUp(e.x, e.y)
             }
-            MotionEvent.ACTION_CANCEL -> { pointerDown = false; removeCallbacks(longPress) }
+            MotionEvent.ACTION_CANCEL -> { pointerDown = false; pulling = false; removeCallbacks(longPress) }
         }
         return true
     }
@@ -270,7 +386,16 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private fun onUp(x: Float, y: Float) {
         if (!pointerDown) return
         pointerDown = false
+        if (selectMode) {
+            if (hypot(x - downX, y - downY) < 20 * d) selectAt(x, y)
+            return
+        }
         val now = SystemClock.uptimeMillis()
+        if (pulling) {
+            pulling = false
+            fireSling(now)
+            return
+        }
         if (now - lastThrow < RELOAD_MS || swing != null) return
         val dx = x - downX
         val dy = y - downY
@@ -289,29 +414,59 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         ty = ty.coerceIn(0f, height.toFloat())
         lastThrow = now
         shots++
-        val hit = PendingHit(tx, ty, weapon)
-        // Nesne kesiti, alet havadayken arka planda hazırlanır
-        segmentAt?.invoke(tx, ty) { cut -> hit.cut = cut; hit.done = true } ?: run { hit.done = true }
+        val hit = newHit(tx, ty, weapon)
         if (weapon.thrown) {
             val sx = width / 2f
             val sy = handY()
-            projectiles += Projectile(hit, sx, sy, min(220f * d, hypot(tx - sx, ty - sy) * 0.35f))
+            projectiles += Projectile(hit, sx, sy, min(220f * d, hypot(tx - sx, ty - sy) * 0.35f), weapon.duration, 1f, 0.28f)
             sfx?.throwSound()
         } else {
-            swing = Swing(hit, now)
+            swing = Swing(hit)
             sfx?.swing()
         }
     }
 
+    /** Vuruşu oluşturur; nesne kesiti alet havadayken arka planda hazırlanır. */
+    private fun newHit(x: Float, y: Float, w: Weapon, chain: Int = 0, visited: Set<Target> = emptySet(), aimed: Target? = null): PendingHit {
+        val hit = PendingHit(x, y, w, chain, visited, aimed)
+        segmentAt?.invoke(x, y) { cut -> hit.cut = cut; hit.done = true } ?: run { hit.done = true }
+        return hit
+    }
+
     private fun handY() = height - 150 * d
 
-    // ---------- Çarpışma ----------
+    // ---------- Sapan ----------
 
-    /** Kesitin kutusuyla en çok örtüşen, modelin gördüğü nesnenin Türkçe adı. */
-    private fun nameFor(box: RectF): String {
-        val best = seen.maxByOrNull { iou(it.second, box) }
-        return if (best != null && iou(best.second, box) > 0.3f) labelOf(best.first) else "nesne"
+    private fun slingRest() = floatArrayOf(width / 2f, height - 175 * d)
+
+    /** Çekme vektörünün tersi yönünde, çekme miktarıyla orantılı uzaklıkta hedef noktası. */
+    private fun slingAim(): FloatArray? {
+        val len = hypot(pullX, pullY)
+        if (len < 25 * d || pullY < 10 * d) return null
+        val (rx, ry) = slingRest().let { it[0] to it[1] }
+        val reach = ry - (insetTop + 90 * d)              // tam çekişte ekranın üstüne kadar
+        val gain = reach / (MAX_PULL * d * 0.85f)
+        val tx = (rx - pullX * gain).coerceIn(0f, width.toFloat())
+        val ty = (ry - pullY * gain).coerceIn(insetTop + 40 * d, ry)
+        return floatArrayOf(tx, ty, len / (MAX_PULL * d))
     }
+
+    private fun fireSling(now: Long) {
+        val aim = slingAim()
+        val (rx, ry) = slingRest().let { it[0] to it[1] }
+        val sx = rx + pullX
+        val sy = ry + pullY
+        pullX = 0f; pullY = 0f
+        if (aim == null || now - lastThrow < RELOAD_MS) return
+        lastThrow = now
+        shots++
+        val power = aim[2].coerceIn(0.2f, 1f)
+        val hit = newHit(aim[0], aim[1], Weapon.SLING)
+        projectiles += Projectile(hit, sx, sy, (20 + 50 * (1 - power)) * d, 0.5f - 0.22f * power, 1f, 0.45f)
+        sfx?.sling()
+    }
+
+    // ---------- Çarpışma ----------
 
     private fun clsFor(box: RectF): String? {
         val best = seen.maxByOrNull { iou(it.second, box) } ?: return null
@@ -333,13 +488,14 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         if (inRubble(h.x, h.y, now)) {
             burst(h.x, h.y, 10, intArrayOf(0xFFBFF3FF.toInt(), 0xFF9AA3AA.toInt()), 140f)
             if (w.thrown) sfx?.miss()
+            ricochet(h, null)
             return
         }
-        val target = targets
+        val target = h.aimed?.takeIf { !it.isBroken(now) } ?: targets
             .filter { !it.isBroken(now) && h.x > it.box.left - pad && h.x < it.box.right + pad &&
                 h.y > it.box.top - pad && h.y < it.box.bottom + pad }
             .minByOrNull { it.box.width() * it.box.height() } // en küçüğü, büyük ihtimalle öndeki
-        // Kesit hedefle uyuşmuyorsa (başka bir nesneyi seçtiyse) hedefin kutusundan kesilir
+        // Kesit hedefle uyuşmuyorsa (başka bir nesneyi seçtiyse) hedefin kendi kesiti/kutusu kullanılır
         val cut = h.cut?.takeIf { c -> target == null || iou(c.box, target.box) > 0.1f || target.box.contains(c.box.centerX(), c.box.centerY()) }
 
         if (target != null) {
@@ -350,23 +506,52 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
                 burst(h.x, h.y, 10, intArrayOf(Color.WHITE, 0xFFCFEFFF.toInt()), 160f)
                 shake = max(shake, if (w.thrown) 4f else 8f)
                 popup(h.x, h.y - 20 * d, "Çatladı!", 0xFFCFEFFF.toInt())
-                return
+            } else {
+                breakObject(cut ?: target.cut?.takeIf { iou(it.box, target.box) > 0.3f } ?: fallbackCut(target.box),
+                    target.info, target.info.label, target, h)
             }
-            val c = cut ?: fallbackCut(target.box)
-            breakObject(c, target.info, target.info.label, target, h)
+            ricochet(h, target)
             return
         }
         if (cut != null) {
             val cls = clsFor(cut.box)
             val info = cls?.let { BREAKABLES[it] } ?: GENERIC_OBJECT
-            val name = cls?.let { labelOf(it) }?.replaceFirstChar { it.titlecase(java.util.Locale("tr")) } ?: "Nesne"
+            val name = cls?.let { labelOf(it).replaceFirstChar { c -> c.titlecase(tr) } } ?: "Nesne"
             breakObject(cut, info, name, null, h)
+            ricochet(h, null)
             return
         }
         // Iska: duvar, zemin ya da boşluk
         if (w.thrown) sfx?.miss()
         burst(h.x, h.y, 8, intArrayOf(0xFFC9B8A0.toInt(), 0xFF8D7D68.toInt()), 120f)
         shake = max(shake, if (w.thrown) 0f else 5f)
+        ricochet(h, null)
+    }
+
+    /**
+     * Top, çarptığı yerden henüz kırılmamış en yakın seçili nesneye seker. Seçili nesne kalmadıysa
+     * yere düşer. Diğer aletler sekmez.
+     */
+    private fun ricochet(h: PendingHit, hitTarget: Target?) {
+        if (h.weapon != Weapon.BALL) return
+        val now = SystemClock.uptimeMillis()
+        val visited = if (hitTarget != null) h.visited + hitTarget else h.visited
+        val next = if (h.chain >= MAX_BOUNCES) null else targets
+            .filter { it.selected && !it.isBroken(now) && it !in visited }
+            .minByOrNull { hypot(it.box.centerX() - h.x, it.box.centerY() - h.y) }
+        val r = Weapon.BALL.radiusDp * d * 0.28f
+        if (next == null) {
+            if (h.chain > 0 || hitTarget != null) sfx?.bounce()
+            drops += DropBall(h.x, h.y, (Random.nextFloat() - 0.5f) * 160f * d, -220f * d, r)
+            return
+        }
+        val tx = next.box.centerX() + (Random.nextFloat() - 0.5f) * next.box.width() * 0.3f
+        val ty = next.box.centerY() + (Random.nextFloat() - 0.5f) * next.box.height() * 0.3f
+        val hop = newHit(tx, ty, Weapon.BALL, h.chain + 1, visited, next)
+        val dist = hypot(tx - h.x, ty - h.y)
+        projectiles += Projectile(hop, h.x, h.y, min(140f * d, dist * 0.35f), (0.22f + dist / (2200f * d)).coerceAtMost(0.45f), 0.28f, 0.28f)
+        sfx?.bounce()
+        popup(h.x, h.y - 50 * d, "Sekme! ×${h.chain + 2}", 0xFF8EF0FF.toInt())
     }
 
     private fun fallbackCut(box: RectF): Cutout? {
@@ -390,10 +575,11 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             target.wreck = wreck
             target.cracks.clear()
             target.hp = info.hp
+            target.selected = false
+            if (target.pinned) postDelayed({ targets.remove(target) }, WRECK_MS)
         } else {
             looseWrecks += wreck
         }
-        if (selection != null && iou(selection!!.box, box) > 0.2f) selection = null
         burst(
             h.x, h.y, 30,
             if (electronic) intArrayOf(Color.WHITE, 0xFF9AD7FF.toInt(), 0xFFFFD23F.toInt())
@@ -404,9 +590,10 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         haptics?.invoke(info.material)
         shake = if (h.weapon.thrown) 14f else 18f
         flash = 0.3f
-        score += info.points
+        val points = info.points * (1 + h.chain)
+        score += points
         broken++
-        popup(h.x, h.y - 30 * d, "$name kırıldı! +${info.points}", 0xFFFFD23F.toInt())
+        popup(h.x, h.y - 30 * d, "$name kırıldı! +$points", 0xFFFFD23F.toInt())
     }
 
     private fun burst(x: Float, y: Float, n: Int, colors: IntArray, speed: Float) {
@@ -446,7 +633,7 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         val landed = ArrayList<PendingHit>()
         while (pit.hasNext()) {
             val p = pit.next()
-            p.t = min(1f, p.t + dt / p.hit.weapon.duration)
+            p.t = min(1f, p.t + dt / p.dur)
             p.spin += dt * 12f
             if (p.t >= 1f && p.hit.ready(now)) { pit.remove(); landed += p.hit }
         }
@@ -461,6 +648,13 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             if (s.t >= 1f && s.impacted) swing = null
         }
 
+        val floor = height - 70 * d
+        drops.removeAll { b ->
+            b.age += dt; b.vy += 1600f * d * dt; b.x += b.vx * dt; b.y += b.vy * dt; b.spin += b.vx / max(1f, b.r) * dt
+            if (b.y > floor && b.vy > 0) { b.y = floor; b.vy *= -0.45f; b.vx *= 0.7f; b.bounces++ }
+            b.age > 1.6f || b.bounces > 3
+        }
+
         updateShards(shards, dt, height - 30 * d, d)
         val g = 900f * d
         particles.removeAll { q ->
@@ -472,7 +666,6 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         flash = max(0f, flash - dt * 1.5f)
         for (t in targets) if (t.wreck != null && now >= t.wreck!!.until) t.wreck = null
         looseWrecks.removeAll { now >= it.until }
-        if (selection != null && now - selectionT > 4000) selection = null
     }
 
     // ---------- Çizim ----------
@@ -488,6 +681,10 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private val selectionPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
         colorFilter = PorterDuffColorFilter(0xFFFFD23F.toInt(), PorterDuff.Mode.SRC_ATOP)
     }
+    private val badgeFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFD23F.toInt() }
+    private val badgeText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.BLACK; typeface = Typeface.DEFAULT_BOLD; textAlign = Paint.Align.CENTER
+    }
     private val hudBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(115, 0, 0, 0) }
     private val hudSmall = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(190, 255, 255, 255); textAlign = Paint.Align.CENTER }
     private val hudBig = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; typeface = Typeface.DEFAULT_BOLD; textAlign = Paint.Align.CENTER }
@@ -501,6 +698,13 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     private val weaponEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = Color.argb(120, 0, 0, 0) }
     private val gripPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2B2B2B.toInt() }
     private val tapePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF555555.toInt(); style = Paint.Style.STROKE }
+    private val woodStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; color = 0xFF8B5A2B.toInt()
+    }
+    private val woodLight = Paint(woodStroke).apply { color = 0xFFC48A52.toInt() }
+    private val bandPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; color = 0xFFC0392B.toInt() }
+    private val pouchPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF4A3426.toInt() }
+    private val aimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val flashPaint = Paint()
     private val tmpPath = Path()
     private val tmpRect = RectF()
@@ -520,16 +724,13 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
 
         // Önce izler (nesnenin yerini örten doldurma), sonra hedef işaretleri
         for (w in looseWrecks) drawWreck(c, w, w.box, now, d)
+        var order = 0
         for (t in targets) {
             val w = t.wreck
             if (w != null && now < w.until) { drawWreck(c, w, t.box, now, d); continue }
             if (t.cracks.isNotEmpty()) drawCracks(c, t.box, t.cracks, d)
-            if (showBoxes) drawMarker(c, t, now)
-        }
-        selection?.let { s ->
-            val pulse = 0.5f + 0.5f * sin((now - selectionT) / 160f)
-            selectionPaint.alpha = (70 + 80 * pulse).toInt()
-            c.drawBitmap(s.obj, null, s.box, selectionPaint)
+            if (t.selected) drawSelected(c, t, ++order, now)
+            else if (showBoxes) drawMarker(c, t, now)
         }
 
         drawShards(c, shards)
@@ -551,10 +752,15 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             val e = 1f - (1f - p.t).pow(1.6f) // ileriye doğru yavaşlama (derinlik hissi)
             val x = p.sx + (p.hit.x - p.sx) * e
             val y = p.sy + (p.hit.y - p.sy) * e - p.arc * 4f * e * (1f - e)
-            drawAmmo(c, p.hit.weapon, x, y, p.hit.weapon.radiusDp * d * (1f - 0.72f * e), p.spin)
+            val r = p.hit.weapon.radiusDp * d * (p.s0 + (p.s1 - p.s0) * e)
+            drawAmmo(c, p.hit.weapon, x, y, r, p.spin)
+        }
+        for (b in drops) {
+            ammoPaint.alpha = 255
+            drawAmmo(c, Weapon.BALL, b.x, b.y, b.r, b.spin)
         }
 
-        drawHand(c, now)
+        if (!selectMode) drawHand(c, now)
         focusRing?.let { f ->
             val age = now - focusT
             if (age > 900) focusRing = null else {
@@ -582,6 +788,30 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             flashPaint.color = Color.argb((flash * 255).toInt().coerceIn(0, 255), 255, 255, 255)
             c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), flashPaint)
         }
+    }
+
+    /** Seçili nesne: silüeti sarı parlar, köşesinde sıra numarası. */
+    private fun drawSelected(c: Canvas, t: Target, n: Int, now: Long) {
+        val pulse = 0.5f + 0.5f * sin(now / 180f)
+        val cut = t.cut
+        if (cut != null) {
+            selectionPaint.alpha = (60 + 80 * pulse).toInt()
+            c.drawBitmap(cut.obj, null, t.box, selectionPaint)
+        }
+        markerPaint.color = 0xFFFFD23F.toInt()
+        markerPaint.alpha = (150 + 100 * pulse).toInt()
+        markerPaint.strokeWidth = 2.5f * d
+        c.drawRoundRect(t.box, 8 * d, 8 * d, markerPaint)
+        val r = 11 * d
+        val bx = t.box.left + r * 0.6f
+        val by = max(insetTop + r, t.box.top + r * 0.6f)
+        c.drawCircle(bx, by, r, badgeFill)
+        badgeText.textSize = 13 * d
+        c.drawText(n.toString(), bx, by + 4.5f * d, badgeText)
+        labelText.textSize = 12 * d
+        val label = if (t.info.hp > 1) t.info.label + " " + "●".repeat(max(0, t.hp)) else t.info.label
+        c.drawRect(bx + r + 2 * d, by - 9 * d, bx + r + 10 * d + labelText.measureText(label), by + 9 * d, labelBg)
+        c.drawText(label, bx + r + 6 * d, by + 4 * d, labelText)
     }
 
     private fun drawMarker(c: Canvas, t: Target, now: Long) {
@@ -644,24 +874,77 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         c.restore()
     }
 
-    /** FPS tarzı: elde bekleyen top/taş ya da sağ alttan uzanan sopa/anahtar. */
+    /** FPS tarzı: elde bekleyen top/taş, sapan ya da sağ alttan uzanan sopa/anahtar. */
     private fun drawHand(c: Canvas, now: Long) {
-        if (weapon.thrown) {
-            val ready = now - lastThrow > RELOAD_MS
-            val r = weapon.radiusDp * d * 1.3f
-            val bob = sin(now / 400f) * 3 * d
-            val y = handY() + bob + if (ready) 0f else 60 * d
-            tmpRect.set(width / 2f - r, handY() + r * 0.8f, width / 2f + r, handY() + r * 1.2f)
-            c.drawOval(tmpRect, shadowPaint)
-            drawAmmo(c, weapon, width / 2f, y, r, 0.3f)
-        } else {
-            drawMelee(c, now)
+        when {
+            weapon == Weapon.SLING -> drawSling(c, now)
+            weapon.thrown -> {
+                val ready = now - lastThrow > RELOAD_MS
+                val r = weapon.radiusDp * d * 1.3f
+                val bob = sin(now / 400f) * 3 * d
+                val y = handY() + bob + if (ready) 0f else 60 * d
+                tmpRect.set(width / 2f - r, handY() + r * 0.8f, width / 2f + r, handY() + r * 1.2f)
+                c.drawOval(tmpRect, shadowPaint)
+                drawAmmo(c, weapon, width / 2f, y, r, 0.3f)
+            }
+            else -> drawMelee(c, now)
         }
-        if (pointerDown) {
+        if (pointerDown && !pulling) {
             markerPaint.color = Color.WHITE
             markerPaint.alpha = 180
             markerPaint.strokeWidth = 2 * d
             c.drawCircle(downX, downY, 16 * d, markerPaint)
+        }
+    }
+
+    /** Y biçimli tahta sapan; lastik çekilince torba parmağı izler, nişan yolu noktalarla gösterilir. */
+    private fun drawSling(c: Canvas, now: Long) {
+        val (rx, ry) = slingRest().let { it[0] to it[1] }
+        val tipDx = 40 * d
+        val tipY = ry - 6 * d
+        val forkY = ry + 60 * d
+        // Gövde ve çatal
+        woodStroke.strokeWidth = 16 * d
+        woodLight.strokeWidth = 5 * d
+        tmpPath.reset()
+        tmpPath.moveTo(rx, height + 20 * d)
+        tmpPath.lineTo(rx, forkY)
+        tmpPath.moveTo(rx, forkY + 4 * d)
+        tmpPath.quadTo(rx - tipDx * 0.9f, forkY - 10 * d, rx - tipDx, tipY)
+        tmpPath.moveTo(rx, forkY + 4 * d)
+        tmpPath.quadTo(rx + tipDx * 0.9f, forkY - 10 * d, rx + tipDx, tipY)
+        c.drawPath(tmpPath, woodStroke)
+        c.drawPath(tmpPath, woodLight)
+
+        val ready = now - lastThrow > RELOAD_MS
+        val px = rx + pullX
+        val py = ry + pullY + if (pulling) 0f else 6 * d
+        val stretch = hypot(pullX, pullY) / (MAX_PULL * d)
+        bandPaint.strokeWidth = (5 - 2.5f * stretch) * d
+        // Arka lastik, torba ve taş, ön lastik
+        c.drawLine(rx + tipDx, tipY, px, py, bandPaint)
+        tmpRect.set(px - 14 * d, py - 7 * d, px + 14 * d, py + 7 * d)
+        c.drawRoundRect(tmpRect, 6 * d, 6 * d, pouchPaint)
+        if (ready) drawAmmo(c, Weapon.SLING, px, py - 4 * d, 11 * d, 0.4f)
+        c.drawLine(rx - tipDx, tipY, px, py, bandPaint)
+
+        if (pulling) {
+            val aim = slingAim() ?: return
+            val power = aim[2].coerceIn(0.2f, 1f)
+            val arc = (20 + 50 * (1 - power)) * d
+            aimPaint.alpha = 220
+            for (i in 1..14) {
+                val tt = i / 15f
+                val e = 1f - (1f - tt).pow(1.6f)
+                val x = px + (aim[0] - px) * e
+                val y = py + (aim[1] - py) * e - arc * 4f * e * (1f - e)
+                aimPaint.alpha = (230 * (1f - tt * 0.6f)).toInt()
+                c.drawCircle(x, y, (3.5f - 2f * tt) * d, aimPaint)
+            }
+            markerPaint.color = Color.WHITE
+            markerPaint.alpha = 200
+            markerPaint.strokeWidth = 2 * d
+            c.drawCircle(aim[0], aim[1], 12 * d, markerPaint)
         }
     }
 
@@ -673,20 +956,18 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         val rest = -18f + sin(now / 500f) * 2f
         val s = swing
         val angle: Float
-        var ghosts = false
         if (s != null && s.hit.weapon == weapon) {
             // 0 = dik yukarı, pozitif = sağa. Geriye kaldır → hedefe doğru savur → geri dön
             val target = Math.toDegrees(atan2((s.hit.x - px).toDouble(), (py - s.hit.y).toDouble())).toFloat()
             val windup = rest + 35f
             val follow = target - 30f
+            var ghosts = false
             angle = when {
                 s.t < 0.3f -> lerp(rest, windup, s.t / 0.3f)
                 s.t < 0.55f -> { ghosts = true; lerp(windup, follow, ((s.t - 0.3f) / 0.25f).pow(0.7f)) }
                 else -> lerp(follow, rest, (s.t - 0.55f) / 0.45f)
             }
-            if (ghosts) {
-                for ((back, alpha) in listOf(12f to 50, 24f to 25)) drawWeaponAt(c, px, py, angle + back, alpha)
-            }
+            if (ghosts) for ((back, alpha) in listOf(12f to 50, 24f to 25)) drawWeaponAt(c, px, py, angle + back, alpha)
         } else {
             angle = rest
         }
@@ -795,6 +1076,7 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     }
 
     private companion object {
-        const val IDLE_STATUS = "Neye vurursan kırılır · uzun bas: seç ve odakla · iki parmak: yakınlaştır"
+        const val MAX_PULL = 170f // dp
+        const val IDLE_STATUS = "Neye vurursan kırılır · 🎯 Seç: hedefleri işaretle · 🔍 Tara: eşyaları bul"
     }
 }

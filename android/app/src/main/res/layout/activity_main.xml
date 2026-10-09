@@ -31,8 +31,11 @@
 
             <TextView android:id="@+id/btnBall" style="@style/Pill" android:text="@string/w_ball" />
             <TextView android:id="@+id/btnStone" style="@style/Pill" android:text="@string/w_stone" />
+            <TextView android:id="@+id/btnSling" style="@style/Pill" android:text="@string/w_sling" />
             <TextView android:id="@+id/btnBat" style="@style/Pill" android:text="@string/w_bat" />
             <TextView android:id="@+id/btnWrench" style="@style/Pill" android:text="@string/w_wrench" />
+            <TextView android:id="@+id/btnSelect" style="@style/Pill" android:text="@string/select" />
+            <TextView android:id="@+id/btnScan" style="@style/Pill" android:text="@string/scan" />
             <TextView android:id="@+id/btnBoxes" style="@style/Pill" android:text="@string/boxes" />
         </LinearLayout>
     </HorizontalScrollView>
