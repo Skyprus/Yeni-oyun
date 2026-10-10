@@ -63,6 +63,8 @@ class Sfx(context: Context) {
             add("explosion", 2) { synthExplosion(it) }
             add("fall", 1) { synthFall() }
             add("impact", 2) { synthImpact(it) }
+            add("swish", 2) { synthSwish(it) }
+            add("cheer", 1) { synthCheer(it) }
         }.start()
     }
 
@@ -77,6 +79,8 @@ class Sfx(context: Context) {
     fun explosion() = play("explosion")
     fun fall() = play("fall", 0.8f)
     fun impact() = play("impact")
+    fun swish() = play("swish")
+    fun cheer() = play("cheer", 0.8f)
     /** Döngüde çalan yangın çıtırtısı; dönen kimlikle [stop] edilir. */
     fun fireLoop(): Int {
         val id = synchronized(sounds) { sounds["fire"]?.firstOrNull() } ?: return 0

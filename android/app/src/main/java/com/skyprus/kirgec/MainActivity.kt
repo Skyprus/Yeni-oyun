@@ -110,6 +110,7 @@ class MainActivity : ComponentActivity() {
                 weaponButtons.forEach { (k, b) -> b.isSelected = k == w }
                 game.selectMode = false
                 game.drawMode = false
+                game.basketMode = false
                 game.hint(when {
                     w == Weapon.SLING -> "Sapan: parmağını aşağı çek, nişan al, bırak"
                     w == Weapon.MOLOTOV -> "Molotof: arabaya (ya da herhangi bir şeye) fırlat — yanar ve patlar"
@@ -123,6 +124,13 @@ class MainActivity : ComponentActivity() {
         val btnSelect = findViewById<TextView>(R.id.btnSelect)
         btnSelect.setOnClickListener { game.selectMode = !game.selectMode }
         game.onSelectModeChanged = { btnSelect.isSelected = it }
+        val btnBasket = findViewById<TextView>(R.id.btnBasket)
+        btnBasket.setOnClickListener {
+            game.basketMode = !game.basketMode
+            if (game.basketMode) weaponButtons.values.forEach { it.isSelected = false }
+            else weaponButtons.forEach { (k, b) -> b.isSelected = k == game.weapon }
+        }
+        game.onBasketModeChanged = { btnBasket.isSelected = it }
         val btnDraw = findViewById<TextView>(R.id.btnDraw)
         btnDraw.setOnClickListener { game.drawMode = !game.drawMode }
         game.onDrawModeChanged = { btnDraw.isSelected = it }

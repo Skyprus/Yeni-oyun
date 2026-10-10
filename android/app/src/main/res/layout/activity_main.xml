@@ -29,6 +29,7 @@
             android:paddingStart="8dp"
             android:paddingEnd="8dp">
 
+            <TextView android:id="@+id/btnBasket" style="@style/Pill" android:text="@string/basket" />
             <TextView android:id="@+id/btnBall" style="@style/Pill" android:text="@string/w_ball" />
             <TextView android:id="@+id/btnStone" style="@style/Pill" android:text="@string/w_stone" />
             <TextView android:id="@+id/btnSling" style="@style/Pill" android:text="@string/w_sling" />

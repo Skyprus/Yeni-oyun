@@ -44,6 +44,9 @@ Kamera izni yalnızca **HTTPS** (veya `localhost`) üzerinde çalışır.
 - **🎯 Seç:** dokunduğun nesneleri hedef olarak işaretler (uzun basmak da seçer ve odaklar).
 - **⬚ Çiz:** kırmak istediğin nesnenin etrafına parmakla kare/dikdörtgen çiz; birden fazla kutu çizilebilir.
 - **🔍 Tara:** ekranı yüksek çözünürlükte parça parça tarar, kırılabilir eşyaları bulup seçer.
+- **🏀 Basket modu:** cisimleri merdiven gibi diz (yan yana, her biri bir öncekinden aşağıda). Oyun
+  kurala uyan en uzun zinciri bulur, numaralar ve son basamağın ötesine sanal pota koyar. Topu geri
+  çekip bırak; cisimlerin üstünden sekerek potaya girsin. Sırayla kullanılan her basamak puan katar.
 
 **Kurulum:** Her push'ta GitHub Actions APK'yı derler ve *Releases* sayfasına koyar. Telefondan
 https://github.com/Skyprus/Yeni-oyun/releases/latest adresine gir, `KirGec.apk`'yı indirip aç.

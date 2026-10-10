@@ -133,6 +133,7 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     /** (x, y) noktasındaki nesneyi arka planda ayırır; sonuç ana iş parçacığında geri çağrılır. */
     var segmentAt: ((Float, Float, (Cutout?) -> Unit) -> Unit)? = null
     var sfx: Sfx? = null
+        set(v) { field = v; basket.sfx = v }
     var haptics: ((Material) -> Unit)? = null
     var shakeTarget: View? = null
     /** Uzun basınca o noktaya odaklan (ekran koordinatı). */
@@ -164,6 +165,34 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             hint(if (v) "Çiz: kırmak istediğin nesnenin etrafına parmağınla kutu çiz" else selectionHint())
         }
     var onDrawModeChanged: ((Boolean) -> Unit)? = null
+
+    /** Basket modu: kırma yok; top görülen cisimlerden sekerek sanal potaya atılır. */
+    val basket = BasketGame(resources.displayMetrics.density).also { b ->
+        b.onScore = { pts, text, x, y ->
+            score += pts
+            popup(x, y, text, if (pts > 0) 0xFFFFB347.toInt() else 0xFFCFEFFF.toInt())
+            if (pts > 0) { flash = 0.15f; shake = max(shake, 3f) }
+        }
+    }
+    var basketMode = false
+        set(v) {
+            field = v
+            onBasketModeChanged?.invoke(v)
+            if (v) { refreshBasket(); hint(basket.message) } else hint(selectionHint())
+        }
+    var onBasketModeChanged: ((Boolean) -> Unit)? = null
+    private var lastCourse = 0L
+
+    /** Merdiven adayları: takip edilen/seçilen hedefler + modelin gördüğü diğer cisimler. */
+    private fun refreshBasket() {
+        if (width == 0) return
+        val now = SystemClock.uptimeMillis()
+        val boxes = ArrayList<RectF>()
+        for (t in targets) if (!t.isBroken(now)) boxes += t.box
+        for ((_, b) in seen) if (boxes.none { iou(it, b) > 0.5f }) boxes += b
+        basket.updateCourse(boxes, width, height, insetTop)
+        lastCourse = now
+    }
     private val marking get() = selectMode || drawMode
     private var drawing: RectF? = null
     var status = "Kamera açılıyor…"
@@ -260,6 +289,11 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         targets.removeAll { t ->
             !t.isBroken(now) && if (t.pinned) now - t.created > PINNED_MS
             else now - t.lastSeen > if (t.selected) PINNED_MS else LOST_MS
+        }
+        if (basketMode) {
+            refreshBasket()
+            if (now - statusT > 2500) status = basket.message
+            return
         }
         if (modelState == 1 && now - statusT > 2500) {
             val live = targets.count { !it.isBroken(now) }
@@ -409,6 +443,7 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
                 downX = e.x; downY = e.y; downT = SystemClock.uptimeMillis(); pointerDown = true
                 when {
                     marking -> drawing = RectF(e.x, e.y, e.x, e.y)
+                    basketMode -> basket.onDown(e.x, e.y)
                     weapon == Weapon.SLING -> { pulling = true; pullX = 0f; pullY = 0f }
                     else -> postDelayed(longPress, 450)
                 }
@@ -416,6 +451,7 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             MotionEvent.ACTION_MOVE -> {
                 if (hypot(e.x - downX, e.y - downY) > 12 * d) removeCallbacks(longPress)
                 drawing?.set(min(downX, e.x), min(downY, e.y), max(downX, e.x), max(downY, e.y))
+                if (basketMode) basket.onMove(e.x, e.y)
                 if (pulling) {
                     // Lastik en fazla MAX_PULL kadar gerilir
                     var px = e.x - downX
@@ -449,6 +485,10 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
                 selectMode && hypot(x - downX, y - downY) < 20 * d -> selectAt(x, y)
                 drawMode -> hint("Kutu çizmek için parmağını nesnenin bir köşesinden karşı köşesine sürükle")
             }
+            return
+        }
+        if (basketMode) {
+            basket.onUp(width, height)
             return
         }
         val now = SystemClock.uptimeMillis()
@@ -892,6 +932,10 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
     }
 
     private fun update(dt: Float, now: Long) {
+        if (basketMode) {
+            if (now - lastCourse > 300) refreshBasket()
+            basket.update(dt, width, height)
+        }
         val pit = projectiles.iterator()
         val landed = ArrayList<PendingHit>()
         while (pit.hasNext()) {
@@ -1091,6 +1135,7 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             val w = t.wreck
             if (w != null && now < w.until) { drawWreck(c, w, t.box, now, d); continue }
             if (t.cracks.isNotEmpty()) drawCracks(c, t.box, t.cracks, d)
+            if (basketMode) continue
             if (t.selected) drawSelected(c, t, ++order, now)
             else if (showBoxes) drawMarker(c, t, now)
         }
@@ -1175,7 +1220,8 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
             selectPaint.pathEffect = DashPathEffect(floatArrayOf(10 * d, 7 * d), 0f)
             c.drawRect(it, selectPaint)
         }
-        if (!marking) drawHand(c, now)
+        if (basketMode) basket.draw(c, width, height)
+        else if (!marking) drawHand(c, now)
         focusRing?.let { f ->
             val age = now - focusT
             if (age > 900) focusRing = null else {
@@ -1470,7 +1516,9 @@ class GameView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
         var x = 12 * d
         hudSmall.textSize = 11 * d
         hudBig.textSize = 20 * d
-        for ((label, value) in listOf("Puan" to score, "Kırılan" to broken, "Vuruş" to shots)) {
+        val stats = if (basketMode) listOf("Puan" to score, "Basket" to basket.baskets, "Atış" to basket.shots)
+        else listOf("Puan" to score, "Kırılan" to broken, "Vuruş" to shots)
+        for ((label, value) in stats) {
             val w = 64 * d
             tmpRect.set(x, top, x + w, top + 46 * d)
             c.drawRoundRect(tmpRect, 10 * d, 10 * d, hudBg)

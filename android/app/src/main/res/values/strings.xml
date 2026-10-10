@@ -12,6 +12,7 @@
     <string name="select">🎯 Seç</string>
     <string name="scan">🔍 Tara</string>
     <string name="draw">⬚ Çiz</string>
+    <string name="basket">🏀 Basket</string>
     <string name="permission_text">Oyun, etrafındaki kırılabilir eşyaları görmek için kameraya ihtiyaç duyar. Görüntü telefonundan dışarı çıkmaz.</string>
     <string name="permission_button">Kamera iznini ver</string>
 </resources>
