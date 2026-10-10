@@ -134,16 +134,20 @@ class BasketGame(private val d: Float) {
         return ahead && gap < w * 0.45f
     }
 
+    /**
+     * Pota son basamağın ötesine ve belirgin şekilde aşağıya konur (basamaklardan seken top oraya
+     * düşebilsin). Ekran dar olduğu için yana sığmazsa son basamağın altına iner.
+     * Değerler, örnek merdivenlerde binlerce atışın simülasyonuyla seçildi.
+     */
     private fun placeHoop(w: Int, h: Int, insetTop: Int) {
         val last = chain.lastOrNull()
         if (last == null) { hoopOk = false; return }
-        val rimW = (last.width() * 0.9f).coerceIn(70 * d, 110 * d)
-        var cx = if (dir > 0) last.right + 30 * d + rimW / 2 else last.left - 30 * d - rimW / 2
-        cx = cx.coerceIn(rimW / 2 + 24 * d, w - rimW / 2 - 24 * d)
-        var y = last.top + 55 * d
-        // Kenara sıkıştığı için son basamağın üstüne denk geldiyse onun altına in
-        if (cx + rimW / 2 > last.left && cx - rimW / 2 < last.right) y = last.bottom + 50 * d
-        rimY = y.coerceIn(insetTop + 140 * d, h - 220 * d)
+        val rimW = (last.width() * 1.1f).coerceIn(95 * d, 135 * d)
+        var cx = if (dir > 0) last.right + 10 * d + rimW / 2 else last.left - 10 * d - rimW / 2
+        cx = cx.coerceIn(rimW / 2 + 12 * d, w - rimW / 2 - 12 * d)
+        var y = last.top + 140 * d
+        if (cx - rimW / 2 < last.right && cx + rimW / 2 > last.left) y = max(y, last.bottom + 90 * d)
+        rimY = y.coerceIn(insetTop + 140 * d, h - 200 * d)
         rimL = cx - rimW / 2
         rimR = cx + rimW / 2
         boardX = if (dir > 0) rimR + 8 * d else rimL - 8 * d
@@ -195,31 +199,7 @@ class BasketGame(private val d: Float) {
         netSwing = max(0f, netSwing - dt * 1.5f)
         val b = ball ?: return
         val steps = 4
-        val sdt = dt / steps
-        repeat(steps) {
-            val prevY = b.y
-            b.vy += g * sdt
-            b.x += b.vx * sdt
-            b.y += b.vy * sdt
-            b.age += sdt
-            b.spin += b.vx / b.r * sdt
-            // Ekran kenarları
-            if (b.x < b.r) { b.x = b.r; b.vx = abs(b.vx) * 0.7f }
-            if (b.x > w - b.r) { b.x = w - b.r; b.vx = -abs(b.vx) * 0.7f }
-            // Basamaklar
-            frozenChain.forEachIndexed { i, p -> if (collideRect(b, p)) hitPlatform(b, i) }
-            if (hoopOk) {
-                // Çember uçları ve pano
-                if (collideCircle(b, rimL, rimY, 3.5f * d) || collideCircle(b, rimR, rimY, 3.5f * d)) rimHit(b)
-                val board = RectF(boardX - 3 * d, rimY - 95 * d, boardX + 3 * d, rimY + 12 * d)
-                if (collideRect(b, board)) sfx?.bounce()
-                // Sayı: top çemberin içinden aşağı doğru geçti
-                if (!b.scored && b.vy > 0 && prevY < rimY && b.y >= rimY && b.x > rimL + b.r * 0.4f && b.x < rimR - b.r * 0.4f) {
-                    b.scored = true
-                    score(b)
-                }
-            }
-        }
+        repeat(steps) { stepBall(b, dt / steps, w, frozenChain, live = true) }
         if (b.y > h + 3 * b.r || b.age > 12f) {
             if (!b.scored) {
                 val n = orderedHits(b)
@@ -229,8 +209,46 @@ class BasketGame(private val d: Float) {
         }
     }
 
+    /**
+     * Bir fizik adımı. [live] false ise (nişan önizlemesi) ses/puan yan etkisi olmaz.
+     * @return bu adımda bir basamağa, çembere ya da panoya çarptıysa true
+     */
+    private fun stepBall(b: Ball, sdt: Float, w: Int, plats: List<RectF>, live: Boolean): Boolean {
+        val prevY = b.y
+        var hit = false
+        b.vy += g * sdt
+        b.x += b.vx * sdt
+        b.y += b.vy * sdt
+        b.age += sdt
+        b.spin += b.vx / b.r * sdt
+        // Ekran kenarları
+        if (b.x < b.r) { b.x = b.r; b.vx = abs(b.vx) * 0.7f }
+        if (b.x > w - b.r) { b.x = w - b.r; b.vx = -abs(b.vx) * 0.7f }
+        // Basamaklar
+        plats.forEachIndexed { i, p ->
+            if (collideRect(b, p, 0.8f)) {
+                hit = true
+                if (live) hitPlatform(b, i) else if (i !in b.touched) b.touched += i
+            }
+        }
+        if (hoopOk) {
+            if (collideCircle(b, rimL, rimY, 3.5f * d) || collideCircle(b, rimR, rimY, 3.5f * d)) {
+                hit = true
+                if (live) rimHit(b)
+            }
+            val board = RectF(boardX - 3 * d, rimY - 95 * d, boardX + 3 * d, rimY + 12 * d)
+            if (collideRect(b, board, 0.6f)) { hit = true; if (live) sfx?.bounce() }
+            // Sayı: top çemberin içinden aşağı doğru geçti
+            if (live && !b.scored && b.vy > 0 && prevY < rimY && b.y >= rimY && b.x > rimL + b.r * 0.4f && b.x < rimR - b.r * 0.4f) {
+                b.scored = true
+                score(b)
+            }
+        }
+        return hit
+    }
+
     /** Daire–dikdörtgen çarpışması; çarptıysa topu dışarı iter ve hızı yansıtır. */
-    private fun collideRect(b: Ball, rc: RectF): Boolean {
+    private fun collideRect(b: Ball, rc: RectF, e: Float): Boolean {
         val cx = b.x.coerceIn(rc.left, rc.right)
         val cy = b.y.coerceIn(rc.top, rc.bottom)
         var nx = b.x - cx
@@ -252,7 +270,7 @@ class BasketGame(private val d: Float) {
             b.x = cx + nx * b.r
             b.y = cy + ny * b.r
         }
-        bounce(b, nx, ny, 0.72f)
+        bounce(b, nx, ny, e)
         return true
     }
 
@@ -301,6 +319,12 @@ class BasketGame(private val d: Float) {
     }
 
     private fun score(b: Ball) {
+        if (b.touched.isEmpty()) {
+            // Doğrudan atış sayılmaz: modun amacı cisimlerden sektirmek
+            sfx?.swish()
+            onScore?.invoke(0, "Sayılmadı — önce cisimlere sektir!", (rimL + rimR) / 2, rimY - 40 * d)
+            return
+        }
         baskets++
         netSwing = 1f
         val n = orderedHits(b)
@@ -314,7 +338,7 @@ class BasketGame(private val d: Float) {
             full -> "TAM MERDİVEN! +$pts"
             b.rimHits == 0 && n > 0 -> "Swish! $n basamak +$pts"
             n > 0 -> "Basket! $n basamak +$pts"
-            else -> "Basket! +$pts"
+            else -> "Basket! (sırasız) +$pts"
         }
         onScore?.invoke(pts, text, (rimL + rimR) / 2, rimY - 40 * d)
     }
@@ -397,14 +421,30 @@ class BasketGame(private val d: Float) {
             c.drawOval(tmp, shadowPaint)
             drawBall(c, bx, by, r * 1.5f, 0.4f)
             if (aiming && hypot(pullX, pullY) >= 20 * d) {
-                // Tahmini yol (çarpışmasız), birinci saniyenin bir kısmı
+                // Tahmini yol: gerçek fizikle, ilk iki çarpmaya kadar (sonrası oyuncunun becerisi)
                 val v = launchVelocity()
-                for (k in 1..16) {
-                    val t = k * 0.045f
-                    val x = lx + v[0] * t
-                    val y = ly + v[1] * t + 0.5f * g * t * t
-                    dotPaint.alpha = (230 * (1f - k / 18f)).toInt()
-                    c.drawCircle(x, y, (3.5f - k * 0.12f) * d, dotPaint)
+                val sim = Ball(lx, ly, v[0], v[1], r)
+                var hits = 0
+                var k = 0
+                val dtSim = 1f / 240f
+                var acc = 0f
+                var wasHit = false
+                while (sim.age < 2.2f && sim.y < h + r && hits < 2) {
+                    val hitNow = stepBall(sim, dtSim, w, chain, live = false)
+                    // Yuvarlanırken art arda gelen temaslar tek sekme sayılır
+                    if (hitNow && !wasHit) {
+                        hits++
+                        dotPaint.alpha = 255
+                        c.drawCircle(sim.x, sim.y, 6 * d, dotPaint)
+                    }
+                    wasHit = hitNow
+                    acc += dtSim
+                    if (acc >= 0.035f) {
+                        acc = 0f
+                        k++
+                        dotPaint.alpha = (230 - min(k, 40) * 4).coerceAtLeast(60)
+                        c.drawCircle(sim.x, sim.y, (3.6f - min(k, 30) * 0.06f) * d, dotPaint)
+                    }
                 }
             }
         }
