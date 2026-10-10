@@ -330,6 +330,37 @@ class Sfx(context: Context) {
             return out
         }
 
+        /** Topun fileden geçişi: yumuşak, yüksek "şşş". */
+        fun synthSwish(r: Random): FloatArray {
+            val out = buf(0.45f)
+            noise(out, r, 0f, 0.4f, 3500f, 'b', 0.7f)
+            noise(out, r, 0.03f, 0.25f, 6000f, 'h', 0.3f)
+            return out
+        }
+
+        /** Kalabalık sevinci: dalgalanan bant gürültüsü ve birkaç ıslık. */
+        fun synthCheer(r: Random): FloatArray {
+            val out = buf(1.8f)
+            val dt = 1f / SR
+            var lp = 0f; var hp = 0f; var prev = 0f
+            val aL = dt / (1f / (2f * PI.toFloat() * 2500f) + dt)
+            val rcH = 1f / (2f * PI.toFloat() * 600f)
+            val aH = rcH / (rcH + dt)
+            for (i in out.indices) {
+                val t = i.toFloat() / SR
+                val x = r.nextFloat() * 2f - 1f
+                lp += aL * (x - lp)
+                hp = aH * (hp + lp - prev); prev = lp
+                val env = min(1f, t * 6f) * exp(-t * 1.2f) * (0.75f + 0.25f * sin(2f * PI.toFloat() * 3.3f * t))
+                out[i] = hp * env * 2f
+            }
+            repeat(3) {
+                val s0 = 0.1f + r.nextFloat() * 0.6f
+                ping(out, s0, 1800f + r.nextFloat() * 900f, 0.35f, 0.08f)
+            }
+            return out
+        }
+
         /**
          * Basit oda yankısı: farklı gecikmeli dört geri beslemeli tarak süzgeci (Schroeder).
          * Sentez sesleri "kuru" olmaktan çıkar, gerçek bir mekânda çalıyormuş gibi duyulur.
